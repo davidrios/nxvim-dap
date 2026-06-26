@@ -9,15 +9,25 @@
 --
 -- TRY IT interactively:
 --   <leader>db / :DapToggleBreakpoint   toggle a breakpoint on the cursor line
+--   <leader>dB / :DapBreakpointCondition  set a conditional breakpoint
+--   <leader>de / :DapEditBreakpoint     edit condition / hit count / log message
 --   <F5>       / :DapContinue           start debugging (or resume when stopped)
+--   <F6>       / :DapRestart            restart the active session
 --   <F10>/<F11>/<F12>                   step over / into / out
 --   <leader>dr / :DapReplToggle         toggle the debug REPL (i / <CR> to evaluate)
 --   <leader>du / :DapSidebarToggle      toggle the scopes / stack sidebar
 --   <leader>dx / :DapTerminate          end the session
+--   :DapWatch <expr>                    add a watch (or press `a` in the sidebar)
+--   :DapExceptionBreakpoints            pick exception filters (toggle with <CR>)
+--   :DapSessions                        switch the active session (run :DapContinue
+--                                       twice for two concurrent mock sessions)
 --
 -- The mock "stops" at line 2 of the program, single-steps to line 3, and finishes on
 -- continue — enough to watch the stopped sign, the sidebar (a `Locals` scope with
--- `x = 42`), the REPL (`>` evaluates against the frame), and teardown.
+-- `x = 42`, a WATCHES section, EXCEPTIONS checkboxes), the REPL (`>` evaluates against
+-- the frame), and teardown. In the sidebar: `<CR>` expands a variable / jumps to a
+-- frame / toggles an exception filter, `e` edits a value (setVariable), `a` adds a
+-- watch, `x` removes one, `r` refreshes.
 --
 -- A REAL setup would instead register e.g. debugpy (see the commented block below).
 -- The leader is space here; set it before anything maps <leader>.

@@ -42,12 +42,21 @@ then connects to `host:port`, retrying while it comes up. So both adapter kinds 
   stdio pipe (`nx.process`), with the full DAP handshake (initialize → launch/attach →
   breakpoints → configurationDone).
 - **Breakpoints** — toggle (`<leader>db`), conditional (`<leader>dB`), and log points,
+  plus a full **edit** flow (`<leader>de`) for the condition / hit count / log message,
   shown as gutter signs in the source buffer and synced live to a running session.
-- **Stepping** — continue / step over / into / out, with the stopped line marked by a
-  sign + line highlight and the editor jumping to the frame's source.
-- **Sidebar** — a dock showing the stopped thread's **stack frames** and the selected
-  frame's **scopes / variables**; `<CR>` on a frame jumps to it, `<CR>` on a structured
-  variable expands it (lazily fetched).
+- **Exception breakpoints** — pick the adapter's exception filters (e.g. *raised* /
+  *uncaught*) from a checkbox section in the sidebar; the choice is seeded at launch,
+  pushed live, and persists across restarts.
+- **Stepping & restart** — continue / step over / into / out / **restart** (`<F6>`, via
+  the adapter's restart request or a terminate-and-relaunch), with the stopped line
+  marked by a sign + line highlight and the editor jumping to the frame's source.
+- **Sidebar** — a dock showing the stopped thread's **stack frames**, the selected
+  frame's **scopes / variables**, **watch expressions**, the **exception filters**, and
+  (with more than one session) a **sessions switcher**. `<CR>` expands a variable / jumps
+  to a frame / toggles a filter / switches session; `e` **edits a value** (`setVariable`
+  / `setExpression`); `a` adds a watch, `x` removes one, `r` refreshes.
+- **Multiple concurrent sessions** — run several debuggees at once; the panels follow
+  the session that stops, and `:DapSessions` switches the active one.
 - **REPL / console** — the adapter's `output` events plus an `evaluate` prompt that runs
   expressions in the stopped frame.
 - **nvim-dap parity** — the same `adapters` / `configurations` two-table model, so a
@@ -105,7 +114,11 @@ require("nxvim-dap").setup({
     log_point = { text = "◇", hl = "NxDapLogPoint" },
     stopped = { text = "▶", hl = "NxDapStopped", line_hl = "NxDapStoppedLine" },
   },
-  sidebar = { position = "right", width = 40, open_on_stopped = true },
+  sidebar = {
+    position = "right", width = 40, open_on_stopped = true,
+    -- buffer-local keys inside the sidebar (false disables one):
+    mappings = { edit = "e", add_watch = "a", remove = "x", refresh = "r" },
+  },
   repl = { position = "bottom", height = 12, open_on_start = true },
   mappings = { ... },        -- action → key (see below; false disables one / all)
   jump_to_stopped = true,    -- jump the editor to the stopped frame
@@ -160,11 +173,18 @@ current buffer's filetype (prompting if there's more than one).
 | `:DapStepInto`             | step into                                 |
 | `:DapStepOut`              | step out                                  |
 | `:DapPause`                | pause a running thread                    |
-| `:DapTerminate`            | end the session                           |
+| `:DapRestart`              | restart the active session                |
+| `:DapTerminate`            | end the active session                    |
+| `:DapTerminateAll`         | end every session                         |
+| `:DapSessions`             | switch the active session                 |
 | `:DapToggleBreakpoint`     | toggle a breakpoint at the cursor         |
 | `:DapBreakpointCondition`  | set a conditional breakpoint              |
 | `:DapLogPoint`             | set a log point                           |
+| `:DapEditBreakpoint`       | edit condition / hit count / log message  |
 | `:DapClearBreakpoints`     | remove every breakpoint                   |
+| `:DapExceptionBreakpoints` | pick exception breakpoint filters         |
+| `:DapWatch [expr]`         | add a watch expression (no arg → prompt)  |
+| `:DapWatchClear`           | remove every watch expression             |
 | `:DapReplToggle`           | toggle the REPL / console                 |
 | `:DapSidebarToggle`        | toggle the scopes / stack sidebar         |
 | `:DapEval [expr]`          | evaluate an expression in the stopped frame |
@@ -175,9 +195,15 @@ current buffer's filetype (prompting if there's more than one).
 | ------------ | --------------------- | ------------ | -------------------- |
 | `<F5>`       | continue / start      | `<leader>db` | toggle breakpoint    |
 | `<F10>`      | step over             | `<leader>dB` | conditional breakpoint |
-| `<F11>`      | step into             | `<leader>dr` | toggle REPL          |
-| `<F12>`      | step out              | `<leader>du` | toggle sidebar       |
+| `<F11>`      | step into             | `<leader>de` | edit breakpoint      |
+| `<F12>`      | step out              | `<leader>dr` | toggle REPL          |
+| `<F6>`       | restart               | `<leader>du` | toggle sidebar       |
 | `<leader>dx` | terminate             |              |                      |
+
+Inside the **sidebar** these buffer-local keys act on the row under the cursor (defaults,
+configurable via `opts.sidebar.mappings`): `<CR>` expand / jump / toggle filter / switch
+session, `e` edit a value, `a` add a watch, `x` remove the watch, `r` refresh. A
+**double-click** on a row is the mouse form of `<CR>` (a single click positions the cursor).
 
 Rebind or disable any of them through `opts.mappings` (a value of `false` on an entry,
 or `mappings = false` for all):
@@ -196,15 +222,21 @@ require("nxvim-dap").setup({
 | ------------------------------- | --------------------------------------------- |
 | `setup(opts)`                   | configure (re-runnable)                        |
 | `continue()`                    | start debugging / resume                       |
-| `run(config)`                   | start a specific launch/attach configuration   |
+| `run(config)`                   | start a specific launch/attach configuration (a new concurrent session) |
+| `restart()`                     | restart the active session                     |
 | `step_over()` / `step_into()` / `step_out()` | stepping                          |
-| `pause()` / `terminate()`       | pause / end                                    |
+| `pause()` / `terminate()` / `terminate_all()` | pause / end one / end all       |
+| `session()` / `sessions()`      | the active `Session` (or `nil`) / every live session |
+| `set_active_session(s)` / `pick_session()` | switch the active session (direct / prompt) |
 | `toggle_breakpoint()`           | toggle a breakpoint at the cursor              |
-| `set_breakpoint_condition()`    | prompt for a condition + set                   |
+| `set_breakpoint_condition()` / `set_log_point()` | prompt + set a conditional / log point |
+| `edit_breakpoint()`             | edit condition / hit count / log message at the cursor |
 | `clear_breakpoints()`           | remove all breakpoints                         |
+| `add_watch(expr)` / `clear_watches()` | add a watch (no arg → prompt) / remove all |
+| `set_exception_breakpoints()`   | open the exception-filter picker               |
+| `toggle_exception_filter(id)` / `is_exception_selected(id)` | toggle / query a filter |
 | `repl_toggle()` / `sidebar_toggle()` | toggle the panels                         |
 | `eval(expr)`                    | evaluate in the stopped frame (REPL)           |
-| `session()`                     | the active `Session`, or `nil`                 |
 | `adapters` / `configurations`   | the registries (assign into them directly)     |
 
 ## Highlights

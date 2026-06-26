@@ -19,6 +19,9 @@ import socket
 seq = 0
 program = "unknown"
 current_line = 2
+# The Locals scope's variable values, mutated by setVariable / setExpression so a test
+# can observe the change on the next `variables` read (a faithful, reactive mock).
+local_vars = {"x": "42"}
 
 
 def make_io():
@@ -39,7 +42,7 @@ def make_io():
 
 
 def main():
-    global seq, program, current_line
+    global seq, program, current_line, local_vars
     read, raw_write, flush = make_io()
 
     def write(msg):
@@ -86,7 +89,21 @@ def main():
         cmd = req.get("command")
         args = req.get("arguments") or {}
         if cmd == "initialize":
-            respond(req, {"supportsConfigurationDoneRequest": True})
+            respond(req, {
+                "supportsConfigurationDoneRequest": True,
+                "supportsSetVariable": True,
+                "supportsSetExpression": True,
+                # `--no-restart` drops the restart request so the client falls back to
+                # terminate-and-relaunch (the other restart path).
+                "supportsRestartRequest": "--no-restart" not in sys.argv,
+                "supportsConditionalBreakpoints": True,
+                "supportsHitConditionalBreakpoints": True,
+                "supportsLogPoints": True,
+                "exceptionBreakpointFilters": [
+                    {"filter": "raised", "label": "Raised Exceptions", "default": False},
+                    {"filter": "uncaught", "label": "Uncaught Exceptions", "default": True},
+                ],
+            })
             event("initialized")
         elif cmd == "launch":
             program = args.get("program", program)
@@ -98,6 +115,22 @@ def main():
             respond(req, {"breakpoints": [{"verified": True, "line": b.get("line")} for b in bps]})
         elif cmd == "setExceptionBreakpoints":
             respond(req)
+            # React so a test can observe which filters were enabled.
+            filters = ", ".join(args.get("filters", []))
+            event("output", {"category": "console", "output": "exception filters: [%s]\n" % filters})
+        elif cmd == "setVariable":
+            # Mutate the stored value; echo it back as the DAP response requires.
+            local_vars[args.get("name")] = args.get("value")
+            respond(req, {"value": args.get("value"), "variablesReference": 0})
+        elif cmd == "setExpression":
+            # `expression` is the l-value (a variable name / watch); store + echo.
+            local_vars[args.get("expression")] = args.get("value")
+            respond(req, {"value": args.get("value"), "variablesReference": 0})
+        elif cmd == "restart":
+            current_line = 2
+            respond(req)
+            event("output", {"category": "console", "output": "restarted\n"})
+            event("stopped", {"reason": "breakpoint", "threadId": 1, "allThreadsStopped": True})
         elif cmd == "configurationDone":
             respond(req)
             event("output", {"category": "console", "output": "running\n"})
@@ -116,7 +149,8 @@ def main():
             respond(req, {"scopes": [{"name": "Locals", "variablesReference": 2000, "expensive": False}]})
         elif cmd == "variables":
             respond(req, {"variables": [
-                {"name": "x", "value": "42", "type": "int", "variablesReference": 0},
+                {"name": name, "value": value, "type": "int", "variablesReference": 0}
+                for name, value in local_vars.items()
             ]})
         elif cmd == "evaluate":
             respond(req, {"result": args.get("expression", "") + " => ok", "variablesReference": 0})

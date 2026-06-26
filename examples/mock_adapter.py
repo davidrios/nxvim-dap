@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
-# A minimal Debug Adapter Protocol server for nxvim-dap's end-to-end test. It speaks
-# the real Content-Length-framed wire over stdio (the exact path a real adapter uses
-# through nx.process), but its "execution" is scripted: it reports one stopped frame
-# at line 2 of the launched `program`, single steps to line 3, and terminates on
-# continue. Enough to exercise the whole client: handshake, breakpoints, the stopped
-# drill-down (threads/stackTrace/scopes/variables), stepping, evaluate, and teardown.
+# A minimal Debug Adapter Protocol server for the nxvim-dap demo. It speaks the real
+# Content-Length-framed wire over stdio (the exact path a real adapter uses through
+# nx.process), but its "execution" is scripted: it reports one stopped frame at line 2
+# of the launched `program`, single steps to line 3, and terminates on continue. Enough
+# to exercise the whole client: handshake, breakpoints, the stopped drill-down
+# (threads/stackTrace/scopes/variables), stepping, evaluate, watches, variable editing
+# (setVariable / setExpression), exception breakpoint filters, restart, and teardown.
 import sys
 import json
 
 seq = 0
 program = "unknown"
 current_line = 2
+# The Locals scope's values, mutated by setVariable / setExpression so an edit shows up
+# on the next `variables` read.
+local_vars = {"x": "42", "n": "10"}
 
 
 def write(msg):
@@ -58,7 +62,7 @@ def read_msg():
 
 
 def main():
-    global program, current_line
+    global program, current_line, local_vars
     while True:
         req = read_msg()
         if req is None:
@@ -66,7 +70,19 @@ def main():
         cmd = req.get("command")
         args = req.get("arguments") or {}
         if cmd == "initialize":
-            respond(req, {"supportsConfigurationDoneRequest": True})
+            respond(req, {
+                "supportsConfigurationDoneRequest": True,
+                "supportsSetVariable": True,
+                "supportsSetExpression": True,
+                "supportsRestartRequest": True,
+                "supportsConditionalBreakpoints": True,
+                "supportsHitConditionalBreakpoints": True,
+                "supportsLogPoints": True,
+                "exceptionBreakpointFilters": [
+                    {"filter": "raised", "label": "Raised Exceptions", "default": False},
+                    {"filter": "uncaught", "label": "Uncaught Exceptions", "default": True},
+                ],
+            })
             event("initialized")
         elif cmd == "launch":
             program = args.get("program", program)
@@ -79,6 +95,19 @@ def main():
             respond(req, {"breakpoints": verified})
         elif cmd == "setExceptionBreakpoints":
             respond(req)
+            filters = ", ".join(args.get("filters", []))
+            event("output", {"category": "console", "output": "exception filters: [%s]\n" % filters})
+        elif cmd == "setVariable":
+            local_vars[args.get("name")] = args.get("value")
+            respond(req, {"value": args.get("value"), "variablesReference": 0})
+        elif cmd == "setExpression":
+            local_vars[args.get("expression")] = args.get("value")
+            respond(req, {"value": args.get("value"), "variablesReference": 0})
+        elif cmd == "restart":
+            current_line = 2
+            respond(req)
+            event("output", {"category": "console", "output": "restarted\n"})
+            event("stopped", {"reason": "breakpoint", "threadId": 1, "allThreadsStopped": True})
         elif cmd == "configurationDone":
             respond(req)
             event("output", {"category": "console", "output": "running\n"})
@@ -99,7 +128,8 @@ def main():
             ]})
         elif cmd == "variables":
             respond(req, {"variables": [
-                {"name": "x", "value": "42", "type": "int", "variablesReference": 0},
+                {"name": name, "value": value, "type": "int", "variablesReference": 0}
+                for name, value in local_vars.items()
             ]})
         elif cmd == "evaluate":
             respond(req, {"result": args.get("expression", "") + " => ok", "variablesReference": 0})

@@ -1,8 +1,10 @@
 -- nxvim-dap — a Debug Adapter Protocol client for nxvim, built entirely on the
 -- native `nx.*` plugin API (ADR 0002). It is the nxvim sibling of nvim-dap: the same
 -- two-table model (`adapters` = how to reach a debug adapter, `configurations` = what
--- to debug per filetype), the same launch/attach flow, breakpoints, stepping, a
--- scopes/variables sidebar and a REPL — re-expressed in nxvim's idiom.
+-- to debug per filetype), the same launch/attach flow, breakpoints (conditional / hit /
+-- log + exception filters), stepping and restart, multiple concurrent sessions, a
+-- scopes/variables/watches sidebar with inline value editing, and a REPL — re-expressed
+-- in nxvim's idiom.
 --
 -- The keystone is `nx.process` (the duplex child transport): a debug adapter speaks
 -- Content-Length-framed JSON over stdio exactly like a language server, which neither
@@ -14,7 +16,7 @@
 --   session.lua      the DAP protocol state machine over an injected transport
 --   breakpoints.lua  the breakpoint store + cursor toggle
 --   signs.lua        gutter signs + the stopped-line highlight (real buffers)
---   ui.lua           the stack/scopes/variables sidebar (an nx.view dock)
+--   ui.lua           the stack/scopes/variables/watches/exceptions sidebar (nx.view)
 --   repl.lua         the debug console (output + evaluate)
 --   highlights.lua   the fallback highlight palette
 --
@@ -42,7 +44,18 @@ M.config = config_mod.defaults()
 M.adapters = {}
 M.configurations = {}
 
+-- Multiple concurrent sessions: `M._sessions` is the registry (id -> session) and
+-- `M._session` is the ACTIVE one — the session the UI mirrors and the commands target.
+-- A session becomes active when it starts and, again, when it stops (so the panels
+-- follow execution); on termination the active slot falls to another live session.
+M._sessions = {}
 M._session = nil
+-- The chosen exception-breakpoint filters: filter-id -> true. nil means "use the
+-- adapter's own defaults" (the faithful default until the user picks). Persisted across
+-- sessions and restarts so a toggled set sticks.
+M.exception_filters = nil
+
+local session_seq = 0
 local hl_applied = false
 local autocmds_wired = false
 
@@ -57,22 +70,123 @@ local function jump(path, line)
   end)
 end
 
-function M._on_terminated(body)
-  signs.clear_stopped()
-  ui.clear()
-  ui.set_session(nil)
+-- Every live session, newest first (a stable order for the picker / sidebar).
+function M.sessions()
+  local list = {}
+  for _, s in pairs(M._sessions) do
+    list[#list + 1] = s
+  end
+  table.sort(list, function(a, b)
+    return (a.id or 0) > (b.id or 0)
+  end)
+  return list
+end
+
+-- Make `session` the active one: point the UI / REPL at it and repaint.
+function M._set_active(session)
+  M._session = session
+  ui.set_session(session)
+  repl.set_session(session)
+  ui.render()
+end
+
+-- Pick a successor active session after the active one ends: prefer one that is stopped
+-- (so the panels show something actionable), else any live one, else nil.
+local function pick_successor()
+  local fallback
+  for _, s in pairs(M._sessions) do
+    if not s.terminated then
+      fallback = fallback or s
+      if s.stopped_thread_id then
+        return s
+      end
+    end
+  end
+  return fallback
+end
+
+-- A session ended: drop it from the registry, clear its stopped marker, fold the active
+-- slot onto a successor (or nil), and — if it asked to restart — relaunch its config.
+function M._on_session_terminated(session, body)
+  if session.id then
+    M._sessions[session.id] = nil
+    signs.clear_stopped(session.id)
+  end
+  local restart_cfg = session._restart_with
+    or (body and body.restart ~= nil and body.restart ~= false and session.config)
   repl.flush()
-  repl.set_session(nil)
   local exit = body and body.exitCode
   repl.info(
-    "─ session terminated"
+    "─ "
+      .. (session.name or "session")
+      .. " terminated"
       .. (exit ~= nil and (" (exit " .. tostring(exit) .. ")") or "")
       .. " ─"
   )
-  M._session = nil
+
+  if M._session == session then
+    local successor = pick_successor()
+    if successor then
+      M._set_active(successor)
+      M._refresh_active_view()
+    else
+      M._session = nil
+      ui.clear()
+      ui.set_session(nil)
+      repl.set_session(nil)
+    end
+  end
+
+  if restart_cfg then
+    nx.on_next_tick(function()
+      M.run(restart_cfg)
+    end)
+  end
 end
 
--- Start a concrete launch/attach `config` (resolving its adapter by `config.type`).
+-- Build the protocol handler table for one session (capturing `get_id`, which resolves
+-- the session's assigned id once `run` has set it).
+local function make_handlers(get_id)
+  return {
+    get_breakpoints = breakpoints.list,
+    get_exception_filters = function(caps)
+      return M._exception_filter_list(caps)
+    end,
+    notify = function(msg, lvl)
+      nx.notify(msg, lvl)
+    end,
+    on_output = function(category, text)
+      repl.append_output(category, text)
+    end,
+    on_stopped = function(_body, snapshot)
+      local id = get_id()
+      local session = id and M._sessions[id]
+      -- A stop pulls focus to its session (the panels follow execution).
+      if session and M._session ~= session then
+        M._set_active(session)
+      end
+      local frame = snapshot.frames and snapshot.frames[1]
+      if frame and frame.source and frame.source.path then
+        signs.set_stopped(id, frame.source.path, frame.line)
+        if M.config.jump_to_stopped then
+          jump(frame.source.path, frame.line)
+        end
+      end
+      ui.show_stopped(snapshot)
+    end,
+    on_continued = function()
+      signs.clear_stopped(get_id())
+    end,
+    on_terminated = function(body)
+      local id = get_id()
+      M._on_session_terminated(id and M._sessions[id] or { id = id }, body)
+    end,
+    on_state = function(_st) end,
+  }
+end
+
+-- Start a concrete launch/attach `config` (resolving its adapter by `config.type`) as a
+-- NEW concurrent session, made active. Prior sessions keep running.
 function M.run(config)
   config = config_mod.validate_configuration(config)
   local adapter = M.adapters[config.type]
@@ -81,48 +195,67 @@ function M.run(config)
     return
   end
 
-  -- One session at a time: end any prior one first.
-  if M._session and not M._session.terminated then
-    M._session:disconnect()
+  local first = next(M._sessions) == nil
+  if first then
+    -- A fresh debugging run: start the console clean. Concurrent runs share the
+    -- console (so output interleaves) rather than wiping a live session's scrollback.
+    repl.clear()
   end
-  ui.clear()
-  repl.clear()
   if M.config.repl.open_on_start then
     repl.open()
   end
   repl.info("─ starting " .. config.name .. " ─")
 
-  local handlers = {
-    get_breakpoints = breakpoints.list,
-    notify = function(msg, lvl)
-      nx.notify(msg, lvl)
-    end,
-    on_output = function(category, text)
-      repl.append_output(category, text)
-    end,
-    on_stopped = function(_body, snapshot)
-      local frame = snapshot.frames and snapshot.frames[1]
-      if frame and frame.source and frame.source.path then
-        signs.set_stopped(frame.source.path, frame.line)
-        if M.config.jump_to_stopped then
-          jump(frame.source.path, frame.line)
-        end
-      end
-      ui.show_stopped(snapshot)
-    end,
-    on_continued = function()
-      signs.clear_stopped()
-    end,
-    on_terminated = function(body)
-      M._on_terminated(body)
-    end,
-    on_state = function(_st) end,
-  }
+  session_seq = session_seq + 1
+  local id = session_seq
+  local session = session_mod.spawn(
+    adapter,
+    config,
+    make_handlers(function()
+      return id
+    end)
+  )
+  session.id = id
+  session.name = config.name
+  M._sessions[id] = session
+  ui.clear()
+  M._set_active(session)
+  return session
+end
 
-  local session = session_mod.spawn(adapter, config, handlers)
-  M._session = session
-  ui.set_session(session)
-  repl.set_session(session)
+-- Restart the active session: in place via the adapter's `restart` request when it is
+-- supported, otherwise by terminating and relaunching the same configuration as a new
+-- session.
+function M.restart()
+  local s = M._session
+  if not s or s.terminated then
+    nx.notify("nxvim-dap: no active session to restart", 3)
+    return
+  end
+  local config = s.config
+  if s.capabilities.supportsRestartRequest then
+    s:restart(config, function(err)
+      if err then
+        nx.notify("nxvim-dap: restart failed: " .. tostring(err.message), 4)
+      else
+        repl.info("─ restarted " .. (s.name or "session") .. " ─")
+      end
+    end)
+  else
+    -- No restart request: terminate, and relaunch the config once it is gone.
+    s._restart_with = config
+    s:disconnect({ terminate = true })
+  end
+end
+
+-- Make `session` the active one (the sidebar's session switcher), repainting the UI to
+-- reflect its frames / scopes (re-fetched lazily as the user focuses a frame).
+function M.set_active_session(session)
+  if not session then
+    return
+  end
+  M._set_active(session)
+  M._refresh_active_view()
 end
 
 -- Start debugging, or resume if a session is already stopped. With no running
@@ -192,15 +325,146 @@ function M.pause()
 end
 
 function M.terminate()
-  if M._session and not M._session.terminated then
-    M._session:disconnect({ terminate = true })
+  local s = M._session
+  if s and not s.terminated then
+    s:disconnect({ terminate = true })
   else
-    M._on_terminated(nil)
+    -- No live active session: tidy whatever the panels still show.
+    M._on_session_terminated(s or {}, nil)
+  end
+end
+
+-- Terminate every live session (the global stop).
+function M.terminate_all()
+  local any = false
+  for _, s in pairs(M._sessions) do
+    if not s.terminated then
+      any = true
+      s:disconnect({ terminate = true })
+    end
+  end
+  if not any then
+    M._on_session_terminated({}, nil)
   end
 end
 
 function M.session()
   return M._session
+end
+
+-- Re-populate the sidebar from the active session's last stop (used when the active
+-- session changes — a manual switch or a successor after a termination).
+function M._refresh_active_view()
+  local s = M._session
+  if s and not s.terminated and s.stopped_thread_id and s.last_snapshot then
+    ui.show_stopped(s.last_snapshot)
+  else
+    ui.clear()
+  end
+end
+
+-- Open the session switcher (only meaningful with more than one). Picks the active one.
+function M.pick_session()
+  local list = M.sessions()
+  if #list == 0 then
+    nx.notify("nxvim-dap: no sessions", 3)
+    return
+  end
+  if #list == 1 then
+    M.set_active_session(list[1])
+    return
+  end
+  nx.ui
+    .select(list, {
+      prompt = "Active session",
+      format_item = function(s)
+        local status = s.terminated and "ended" or (s.stopped_thread_id and "stopped" or "running")
+        return (s.name or ("session " .. tostring(s.id))) .. " (" .. status .. ")"
+      end,
+    })
+    :next(function(choice)
+      if choice then
+        M.set_active_session(choice)
+      end
+    end)
+end
+
+-- ----- exception breakpoints -------------------------------------------------
+
+-- The filter-id list to enable, given the adapter's advertised `caps`. Returns nil when
+-- the user hasn't picked any (the session then falls back to the adapter defaults).
+function M._exception_filter_list(caps)
+  if M.exception_filters == nil then
+    return nil
+  end
+  local list = {}
+  for _, f in ipairs(caps or {}) do
+    if M.exception_filters[f.filter] then
+      list[#list + 1] = f.filter
+    end
+  end
+  return list
+end
+
+-- Is exception filter `id` currently enabled? Before the user picks, the adapter's
+-- own `default` filters read as enabled (so the sidebar mirrors the live state).
+function M.is_exception_selected(id)
+  if M.exception_filters ~= nil then
+    return M.exception_filters[id] == true
+  end
+  local caps = M._session and M._session.capabilities.exceptionBreakpointFilters
+  for _, f in ipairs(caps or {}) do
+    if f.filter == id then
+      return f.default == true
+    end
+  end
+  return false
+end
+
+-- Toggle exception filter `id` and push the new set to the active session.
+function M.toggle_exception_filter(id)
+  -- Materialize the selection set from the current state on first toggle.
+  if M.exception_filters == nil then
+    M.exception_filters = {}
+    local caps = M._session and M._session.capabilities.exceptionBreakpointFilters
+    for _, f in ipairs(caps or {}) do
+      if f.default then
+        M.exception_filters[f.filter] = true
+      end
+    end
+  end
+  M.exception_filters[id] = not M.exception_filters[id] or nil
+  local s = M._session
+  if s and s.initialized and not s.terminated then
+    local caps = s.capabilities.exceptionBreakpointFilters
+    s:set_exception_breakpoints(M._exception_filter_list(caps) or {})
+  end
+  ui.render()
+end
+
+-- Pick exception filters (the active session's advertised set). Opens the sidebar where
+-- each filter is a `[x]`/`[ ]` row toggled with `<CR>`.
+function M.set_exception_breakpoints()
+  local s = M._session
+  if not s or not s.capabilities.exceptionBreakpointFilters then
+    nx.notify("nxvim-dap: the active adapter has no exception breakpoint filters", 3)
+    return
+  end
+  ui.open()
+end
+
+-- ----- watches ---------------------------------------------------------------
+
+function M.add_watch(expr)
+  if expr and expr ~= "" then
+    ui.add_watch(expr)
+  else
+    ui.prompt_add_watch()
+  end
+end
+
+function M.clear_watches()
+  ui.clear_watches()
 end
 
 -- ----- breakpoints -----------------------------------------------------------
@@ -223,6 +487,40 @@ function M.set_log_point()
       breakpoints.toggle({ logMessage = msg })
     end
   end)
+end
+
+-- Edit the full attribute set of the breakpoint at the cursor (creating one if absent):
+-- condition, then hit condition, then log message — each prompt pre-filled with the
+-- current value, an empty answer clearing that attribute. The breakpoint is kept (this
+-- is "edit", not "toggle").
+function M.edit_breakpoint()
+  local existing = breakpoints.get_at_cursor() or {}
+  nx.ui
+    .input({ prompt = "Condition: ", default = existing.condition or "" })
+    :next(function(condition)
+      if condition == nil then
+        return
+      end
+      nx.ui
+        .input({ prompt = "Hit condition: ", default = existing.hitCondition or "" })
+        :next(function(hit)
+          if hit == nil then
+            return
+          end
+          nx.ui
+            .input({ prompt = "Log message: ", default = existing.logMessage or "" })
+            :next(function(log)
+              if log == nil then
+                return
+              end
+              breakpoints.set_at_cursor({
+                condition = condition ~= "" and condition or nil,
+                hitCondition = hit ~= "" and hit or nil,
+                logMessage = log ~= "" and log or nil,
+              })
+            end)
+        end)
+    end)
 end
 
 function M.clear_breakpoints()
@@ -254,11 +552,17 @@ local COMMANDS = {
   { "DapStepInto", "step_into", "Step into" },
   { "DapStepOut", "step_out", "Step out" },
   { "DapPause", "pause", "Pause execution" },
-  { "DapTerminate", "terminate", "Terminate the debug session" },
+  { "DapRestart", "restart", "Restart the active session" },
+  { "DapTerminate", "terminate", "Terminate the active debug session" },
+  { "DapTerminateAll", "terminate_all", "Terminate every debug session" },
+  { "DapSessions", "pick_session", "Switch the active session" },
   { "DapToggleBreakpoint", "toggle_breakpoint", "Toggle a breakpoint at the cursor" },
   { "DapBreakpointCondition", "set_breakpoint_condition", "Set a conditional breakpoint" },
   { "DapLogPoint", "set_log_point", "Set a log point" },
+  { "DapEditBreakpoint", "edit_breakpoint", "Edit the breakpoint at the cursor" },
   { "DapClearBreakpoints", "clear_breakpoints", "Remove every breakpoint" },
+  { "DapExceptionBreakpoints", "set_exception_breakpoints", "Pick exception breakpoint filters" },
+  { "DapWatchClear", "clear_watches", "Remove every watch expression" },
   { "DapReplToggle", "repl_toggle", "Toggle the debug REPL" },
   { "DapSidebarToggle", "sidebar_toggle", "Toggle the scopes/stack sidebar" },
 }
@@ -268,8 +572,10 @@ local MAP_ACTIONS = {
   step_over = M.step_over,
   step_into = M.step_into,
   step_out = M.step_out,
+  restart = M.restart,
   toggle_breakpoint = M.toggle_breakpoint,
   toggle_breakpoint_condition = M.set_breakpoint_condition,
+  edit_breakpoint = M.edit_breakpoint,
   repl_toggle = M.repl_toggle,
   sidebar_toggle = M.sidebar_toggle,
   terminate = M.terminate,
@@ -303,8 +609,15 @@ function M.setup(opts)
     end
   end
 
-  -- Wire the jump-to-source the sidebar uses for frame selection.
+  -- Wire the sidebar's callbacks into the cross-session state init.lua owns: source
+  -- jumps, the exception-filter selection, and the session switcher.
   ui.on_jump = jump
+  ui.is_exception_selected = M.is_exception_selected
+  ui.on_toggle_exception = M.toggle_exception_filter
+  ui.sessions_provider = function()
+    return M.sessions(), M._session
+  end
+  ui.on_select_session = M.set_active_session
 
   for _, c in ipairs(COMMANDS) do
     local name, fn_name, desc = c[1], c[2], c[3]
@@ -315,6 +628,9 @@ function M.setup(opts)
   nx.command("DapEval", function(ev)
     M.eval(ev and ev.args)
   end, { desc = "Evaluate an expression in the stopped frame" })
+  nx.command("DapWatch", function(ev)
+    M.add_watch(ev and ev.args)
+  end, { desc = "Add a watch expression (no argument prompts for one)" })
 
   -- Default keymaps (any false entry, or `mappings = false`, disables it).
   if M.config.mappings ~= false then

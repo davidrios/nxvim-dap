@@ -230,3 +230,103 @@ nx.test.describe("nxvim-dap.session execution control", function()
     nx.test.expect(n).to_be(1)
   end)
 end)
+
+nx.test.describe("nxvim-dap.session variable + expression editing", function()
+  local function configured(handlers)
+    local hx = harness(handlers)
+    hx.session:start({ type = "mock", request = "launch", name = "t" })
+    hx.respond("initialize", {
+      supportsConfigurationDoneRequest = true,
+      supportsSetVariable = true,
+      supportsSetExpression = true,
+      supportsRestartRequest = true,
+    })
+    hx.adapter({ type = "event", event = "initialized" })
+    hx.respond("configurationDone", {})
+    return hx
+  end
+
+  nx.test.it("set_variable sends setVariable with the container ref, name, value", function()
+    local hx = configured()
+    hx.session:set_variable(5, "x", "99", function() end)
+    local sv = hx.last("setVariable")
+    nx.test.expect(sv).never.to_be_nil()
+    nx.test.expect(sv.arguments.variablesReference).to_be(5)
+    nx.test.expect(sv.arguments.name).to_be("x")
+    nx.test.expect(sv.arguments.value).to_be("99")
+  end)
+
+  nx.test.it("set_variable refuses (no request) when the adapter lacks the capability", function()
+    local hx = harness()
+    hx.session:start({ type = "mock", request = "launch", name = "t" })
+    hx.respond("initialize", {}) -- no supportsSetVariable
+    local err
+    hx.session:set_variable(5, "x", "1", function(e)
+      err = e
+    end)
+    nx.test.expect(hx.last("setVariable")).to_be_nil()
+    nx.test.expect(err).never.to_be_nil()
+  end)
+
+  nx.test.it("set_expression sends setExpression with the l-value, value, frame", function()
+    local hx = configured()
+    hx.session:set_expression("a.b", "7", 1000, function() end)
+    local se = hx.last("setExpression")
+    nx.test.expect(se).never.to_be_nil()
+    nx.test.expect(se.arguments.expression).to_be("a.b")
+    nx.test.expect(se.arguments.value).to_be("7")
+    nx.test.expect(se.arguments.frameId).to_be(1000)
+  end)
+
+  nx.test.it("restart sends the restart request carrying the configuration", function()
+    local hx = configured()
+    hx.session:restart({ type = "mock", request = "launch", name = "t", program = "p" })
+    local rr = hx.last("restart")
+    nx.test.expect(rr).never.to_be_nil()
+    nx.test.expect(rr.arguments.arguments.program).to_be("p")
+  end)
+end)
+
+nx.test.describe("nxvim-dap.session exception breakpoints", function()
+  local CAPS = {
+    supportsConfigurationDoneRequest = true,
+    exceptionBreakpointFilters = {
+      { filter = "raised", label = "Raised", default = false },
+      { filter = "uncaught", label = "Uncaught", default = true },
+    },
+  }
+
+  nx.test.it("seeds the adapter's default filters at configure time", function()
+    local hx = harness()
+    hx.session:start({ type = "mock", request = "launch", name = "t" })
+    hx.respond("initialize", CAPS)
+    hx.adapter({ type = "event", event = "initialized" })
+    local se = hx.last("setExceptionBreakpoints")
+    nx.test.expect(se).never.to_be_nil()
+    nx.test.expect(#se.arguments.filters).to_be(1)
+    nx.test.expect(se.arguments.filters[1]).to_be("uncaught")
+  end)
+
+  nx.test.it("honors a get_exception_filters handler override", function()
+    local hx = harness({
+      get_exception_filters = function()
+        return { "raised", "uncaught" }
+      end,
+    })
+    hx.session:start({ type = "mock", request = "launch", name = "t" })
+    hx.respond("initialize", CAPS)
+    hx.adapter({ type = "event", event = "initialized" })
+    local se = hx.last("setExceptionBreakpoints")
+    nx.test.expect(#se.arguments.filters).to_be(2)
+  end)
+
+  nx.test.it("set_exception_breakpoints pushes a new filter set to a live session", function()
+    local hx = harness()
+    hx.session:start({ type = "mock", request = "launch", name = "t" })
+    hx.respond("initialize", CAPS)
+    hx.adapter({ type = "event", event = "initialized" })
+    hx.session:set_exception_breakpoints({ "raised" }, function() end)
+    local se = hx.last("setExceptionBreakpoints")
+    nx.test.expect(se.arguments.filters[1]).to_be("raised")
+  end)
+end)

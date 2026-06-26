@@ -6,8 +6,9 @@ INTRODUCTION                                                      *nxvim-dap*
 nxvim-dap is a Debug Adapter Protocol (DAP) client — the nxvim sibling of
 nvim-dap. It launches a debug adapter as a duplex stdio child via the native
 `nx.process` API, frames the Content-Length JSON wire itself, and drives
-breakpoints, stepping, a scopes/stack sidebar, and a REPL — all on the `nx.*`
-plugin API.
+breakpoints (incl. conditional / hit / log + exception filters), stepping and
+restart, a scopes/stack/watches sidebar with inline value editing, multiple
+concurrent sessions, and a REPL — all on the `nx.*` plugin API.
 
 Two adapter transports are supported: `type = "executable"` (a duplex stdio
 child over nx.process) and `type = "server"` (a TCP connection over nx.socket,
@@ -48,11 +49,18 @@ COMMANDS                                                 *nxvim-dap-commands*
 :DapStepInto            Step into.
 :DapStepOut             Step out.
 :DapPause               Pause a running thread.
-:DapTerminate           End the session.
+:DapRestart             Restart the active session.
+:DapTerminate           End the active session.
+:DapTerminateAll        End every session.
+:DapSessions            Switch the active session.
 :DapToggleBreakpoint    Toggle a breakpoint at the cursor.
 :DapBreakpointCondition Set a conditional breakpoint.
 :DapLogPoint            Set a log point.
+:DapEditBreakpoint      Edit condition / hit count / log message at the cursor.
 :DapClearBreakpoints    Remove every breakpoint.
+:DapExceptionBreakpoints Pick exception breakpoint filters.
+:DapWatch [expr]        Add a watch expression (no argument prompts).
+:DapWatchClear          Remove every watch expression.
 :DapReplToggle          Toggle the REPL / console.
 :DapSidebarToggle       Toggle the scopes / stack sidebar.
 :DapEval [expr]         Evaluate an expression in the stopped frame.
@@ -64,19 +72,35 @@ Defaults (rebind / disable via `opts.mappings`):
 
     <F5>          continue / start        <leader>db   toggle breakpoint
     <F10>         step over               <leader>dB   conditional breakpoint
-    <F11>         step into               <leader>dr   toggle REPL
-    <F12>         step out                <leader>du   toggle sidebar
+    <F11>         step into               <leader>de   edit breakpoint
+    <F12>         step out                <leader>dr   toggle REPL
+    <F6>          restart                 <leader>du   toggle sidebar
     <leader>dx    terminate
+
+Inside the sidebar (buffer-local, configurable via `opts.sidebar.mappings`):
+
+    <CR>   expand variable / jump to frame / toggle filter / switch session
+    <2-LeftMouse>  double-click — the mouse form of <CR> (single click = cursor)
+    e      edit the value under the cursor (setVariable / setExpression)
+    a      add a watch expression
+    x      remove the watch under the cursor
+    r      refresh scopes + watches
 
 ==============================================================================
 API                                                           *nxvim-dap-api*
 
 require("nxvim-dap"):
     setup(opts)                 continue()            run(config)
-    step_over() step_into() step_out()  pause()  terminate()
-    toggle_breakpoint()         set_breakpoint_condition()
-    clear_breakpoints()         repl_toggle()         sidebar_toggle()
-    eval(expr)                  session()
+    restart()
+    step_over() step_into() step_out()  pause()
+    terminate() terminate_all()
+    session() sessions()  set_active_session(s)  pick_session()
+    toggle_breakpoint()  set_breakpoint_condition()  set_log_point()
+    edit_breakpoint()    clear_breakpoints()
+    add_watch(expr)  clear_watches()
+    set_exception_breakpoints()  toggle_exception_filter(id)
+    is_exception_selected(id)
+    repl_toggle()  sidebar_toggle()  eval(expr)
     adapters  configurations    (the registries — assign into them)
 
 ==============================================================================
@@ -84,10 +108,10 @@ HIGHLIGHTS                                             *nxvim-dap-highlights*
 
 Defined as fallbacks (a colorscheme / `opts.highlights` wins):
 
-    NxDapBreakpoint  NxDapBreakpointCondition  NxDapLogPoint
-    NxDapStopped  NxDapStoppedLine
+    NxDapBreakpoint  NxDapBreakpointCondition  NxDapBreakpointRejected
+    NxDapLogPoint    NxDapStopped  NxDapStoppedLine
     NxDapUIScope  NxDapUIThread  NxDapUIFrame  NxDapUIFrameCurrent
-    NxDapUIVarName  NxDapUIVarType  NxDapUIValue
+    NxDapUIVarName  NxDapUIVarType  NxDapUIValue  NxDapUIDecoration
     NxDapReplPrompt  NxDapReplError
 
 vim:tw=78:ts=8:ft=help:norl:

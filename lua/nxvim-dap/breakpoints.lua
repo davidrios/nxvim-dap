@@ -83,6 +83,52 @@ function M.toggle(opts)
   fire(path)
 end
 
+-- The breakpoint at the cursor (its `{ line, condition?, hitCondition?, logMessage? }`),
+-- or nil if there is none there. Used to pre-fill the edit prompts.
+function M.get_at_cursor()
+  local path, line = here()
+  if not path then
+    return nil
+  end
+  local bps = M.store[path]
+  if not bps then
+    return nil
+  end
+  local at = index_at(bps, line)
+  return at and bps[at] or nil
+end
+
+-- Set (or create) the breakpoint at the cursor with `fields` (`condition`,
+-- `hitCondition`, `logMessage` — a nil clears that attribute). Unlike `toggle`, this
+-- never removes the breakpoint: it is the "edit this breakpoint" path. Re-renders the
+-- file's signs and pushes the change to a live session.
+function M.set_at_cursor(fields)
+  fields = fields or {}
+  local path, line = here()
+  if not path then
+    nx.notify("nxvim-dap: no file in the current buffer", 3)
+    return
+  end
+  local bps = M.store[path] or {}
+  M.store[path] = bps
+  local at = index_at(bps, line)
+  local bp
+  if at then
+    bp = bps[at]
+  else
+    bp = { line = line }
+    bps[#bps + 1] = bp
+    table.sort(bps, function(a, b)
+      return a.line < b.line
+    end)
+  end
+  bp.condition = fields.condition
+  bp.hitCondition = fields.hitCondition
+  bp.logMessage = fields.logMessage
+  signs.render_breakpoints(path, bps)
+  fire(path)
+end
+
 -- Remove every breakpoint (and its signs), firing a change per affected file so a
 -- session clears them too.
 function M.clear_all()

@@ -24,6 +24,8 @@ function M.new(transport, handlers)
   return setmetatable({
     transport = transport,
     handlers = handlers or {},
+    id = nil, -- set by the owner (init.lua) when registered; identifies the session
+    name = nil, -- the configuration name, for the sessions list / messages
     seq = 0,
     pending = {}, -- request seq -> cb(err, body)
     decode = nil, -- the rpc decoder feed fn (set below)
@@ -262,13 +264,60 @@ function Session:_finish_configuration()
       end
     end
   end
-  -- Default exception filters off (a faithful minimal default; a UI to pick filters
-  -- is deferred). Only send if the adapter advertises any.
+  -- Seed exception breakpoints from the chosen filters (the sidebar / `on_change`
+  -- keep them live afterwards). Only send if the adapter advertises any.
   if self.capabilities.exceptionBreakpointFilters then
-    self:request("setExceptionBreakpoints", { filters = {} }, after_exceptions)
+    self:request(
+      "setExceptionBreakpoints",
+      { filters = self:exception_filter_ids() },
+      after_exceptions
+    )
   else
     after_exceptions()
   end
+end
+
+-- The exception-filter ids to enable at configure time. `handlers.get_exception_filters`
+-- (owned by init.lua) may return an explicit list; a nil return falls back to the
+-- adapter's own `default = true` filters (the faithful default).
+function Session:exception_filter_ids()
+  local caps = self.capabilities.exceptionBreakpointFilters
+  if not caps then
+    return {}
+  end
+  local chosen
+  if self.handlers.get_exception_filters then
+    chosen = self.handlers.get_exception_filters(caps)
+  end
+  if chosen == nil then
+    chosen = {}
+    for _, f in ipairs(caps) do
+      if f.default then
+        chosen[#chosen + 1] = f.filter
+      end
+    end
+  end
+  return chosen
+end
+
+-- Push a new exception-filter set to a live session. `filters` is a list of filter
+-- ids (the `filter` field of `exceptionBreakpointFilters` entries). `cb(err)` optional.
+function Session:set_exception_breakpoints(filters, cb)
+  if not self.capabilities.exceptionBreakpointFilters then
+    notify(self, "nxvim-dap: this adapter has no exception breakpoint filters", 3)
+    if cb then
+      cb({ message = "no exception breakpoint filters" })
+    end
+    return
+  end
+  self:request("setExceptionBreakpoints", { filters = filters or {} }, function(err)
+    if err then
+      notify(self, "nxvim-dap: setExceptionBreakpoints failed: " .. tostring(err.message), 4)
+    end
+    if cb then
+      cb(err)
+    end
+  end)
 end
 
 -- Send setBreakpoints for one source file. `bps` is a list of `{ line, condition?,
@@ -313,8 +362,11 @@ function Session:_on_stopped(body)
     self:request("stackTrace", { threadId = tid, startFrame = 0, levels = 20 }, function(_, sbody)
       local frames = (sbody or {}).stackFrames or {}
       self.current_frame = frames[1]
+      -- Remember the snapshot so the UI can re-render this session when it later
+      -- becomes active again (a manual switch / a successor after termination).
+      self.last_snapshot = { frames = frames, threadId = tid }
       if self.handlers.on_stopped then
-        self.handlers.on_stopped(body, { frames = frames, threadId = tid })
+        self.handlers.on_stopped(body, self.last_snapshot)
       end
     end)
   end)
@@ -354,14 +406,57 @@ function Session:variables(ref, cb)
   end)
 end
 
--- Evaluate `expr` in the context of `frame_id` (the REPL / hover). `context` is
--- "repl" | "hover" | "watch".
+-- Evaluate `expr` in the context of `frame_id` (the REPL / hover / watch). `context`
+-- is "repl" | "hover" | "watch".
 function Session:evaluate(expr, frame_id, context, cb)
   self:request("evaluate", {
     expression = expr,
     frameId = frame_id,
     context = context or "repl",
   }, cb)
+end
+
+-- Set the value of a variable in a container (`ref` is the parent's
+-- `variablesReference`). Needs the adapter's `supportsSetVariable`. `cb(err, body)`
+-- where body carries the updated `value` / `variablesReference`.
+function Session:set_variable(ref, name, value, cb)
+  if not self.capabilities.supportsSetVariable then
+    notify(self, "nxvim-dap: this adapter does not support setting variables", 3)
+    if cb then
+      cb({ message = "setVariable unsupported" })
+    end
+    return
+  end
+  self:request("setVariable", {
+    variablesReference = ref,
+    name = name,
+    value = value,
+  }, cb)
+end
+
+-- Set the value of an l-value `expression` (a watch / a variable's `evaluateName`) in
+-- `frame_id`. Needs `supportsSetExpression`. `cb(err, body)`.
+function Session:set_expression(expression, value, frame_id, cb)
+  if not self.capabilities.supportsSetExpression then
+    notify(self, "nxvim-dap: this adapter does not support setExpression", 3)
+    if cb then
+      cb({ message = "setExpression unsupported" })
+    end
+    return
+  end
+  self:request("setExpression", {
+    expression = expression,
+    value = value,
+    frameId = frame_id,
+  }, cb)
+end
+
+-- Ask the adapter to restart the debuggee in place (the `restart` request). Only valid
+-- when `supportsRestartRequest`; callers without it terminate + re-launch instead.
+-- `config` is the launch/attach configuration to restart with (defaults to the one in
+-- flight). `cb(err, body)`.
+function Session:restart(config, cb)
+  self:request("restart", { arguments = config or self.config }, cb)
 end
 
 -- ----- execution control -----------------------------------------------------

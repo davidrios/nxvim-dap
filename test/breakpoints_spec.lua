@@ -65,6 +65,38 @@ nx.test.describe("nxvim-dap breakpoints", function()
     nx.test.expect(bps[1].condition).to_be("x > 1")
   end)
 
+  nx.test.it("set_at_cursor edits a breakpoint in place (keeps it, never toggles off)", function(t)
+    local f = open_temp(t)
+    t:feed("2G")
+    breakpoints.toggle() -- a plain breakpoint
+    -- Edit it: add a condition + hit condition + log message.
+    breakpoints.set_at_cursor({ condition = "i == 3", hitCondition = ">5", logMessage = "hi {i}" })
+    local bps = breakpoints.list()[signs.abspath(f)]
+    nx.test.expect(#bps).to_be(1) -- still one (edited, not removed)
+    nx.test.expect(bps[1].condition).to_be("i == 3")
+    nx.test.expect(bps[1].hitCondition).to_be(">5")
+    nx.test.expect(bps[1].logMessage).to_be("hi {i}")
+
+    -- get_at_cursor reads the breakpoint under the cursor back.
+    local cur = breakpoints.get_at_cursor()
+    nx.test.expect(cur.condition).to_be("i == 3")
+
+    -- Clearing a field (nil) drops it without removing the breakpoint.
+    breakpoints.set_at_cursor({ condition = "i == 3" })
+    nx.test.expect(breakpoints.list()[signs.abspath(f)][1].hitCondition).to_be_nil()
+    nx.test.expect(#breakpoints.list()[signs.abspath(f)]).to_be(1)
+  end)
+
+  nx.test.it("set_at_cursor creates a breakpoint when none exists at the cursor", function(t)
+    local f = open_temp(t)
+    t:feed("3G")
+    breakpoints.set_at_cursor({ condition = "x" })
+    local bps = breakpoints.list()[signs.abspath(f)]
+    nx.test.expect(#bps).to_be(1)
+    nx.test.expect(bps[1].line).to_be(3)
+    nx.test.expect(bps[1].condition).to_be("x")
+  end)
+
   nx.test.it("clear_all removes every breakpoint and sign", function(t)
     local f = open_temp(t)
     t:feed("1G")

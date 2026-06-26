@@ -10,7 +10,11 @@ local M = {}
 
 local bp_ns, stopped_ns
 local cfg
-local stopped_loc -- { bufnr, line } currently marked, for clearing
+-- session_id -> { path, line }: every session's current stopped location. Multiple
+-- concurrent sessions can each be stopped at once, so the stopped marker is keyed by
+-- session and the whole set is repainted on any change (the stopped namespace is
+-- cleared across all buffers, then each location re-marked).
+local stopped_locs = {}
 
 function M.setup(config)
   cfg = config
@@ -80,36 +84,46 @@ function M.clear_breakpoints(path)
   end
 end
 
--- Mark the stopped line: a `▶` sign + a ranged highlight across the line's text.
--- 1-based `line`. Clears any previous stopped marker first.
-function M.set_stopped(path, line)
-  M.clear_stopped()
-  local bufnr = M.path_bufnr(path)
-  if not bufnr then
-    return
-  end
-  local s = cfg.stopped
-  local text = nx.buf.lines(bufnr, line - 1, line, false)[1] or ""
-  nx.buf.set_extmark(bufnr, stopped_ns, line - 1, 0, {
-    sign_text = s.text,
-    sign_hl_group = s.hl,
-    end_row = line - 1,
-    end_col = #text,
-    hl_group = s.line_hl,
-    priority = 30,
-  })
-  stopped_loc = { bufnr = bufnr, line = line }
+-- Mark session `sid`'s stopped line: a `▶` sign + a ranged highlight across the
+-- line's text. 1-based `line`. Replaces that session's previous marker and repaints
+-- every session's markers.
+function M.set_stopped(sid, path, line)
+  stopped_locs[sid] = { path = path, line = line }
+  M.render_stopped()
 end
 
-function M.clear_stopped()
-  if stopped_loc then
-    nx.buf.clear_namespace(stopped_loc.bufnr, stopped_ns, 0, -1)
-    stopped_loc = nil
+-- Clear the stopped marker(s): for one session (`sid` given) or all (`sid` nil), then
+-- repaint whatever remains.
+function M.clear_stopped(sid)
+  if sid == nil then
+    stopped_locs = {}
+  else
+    stopped_locs[sid] = nil
   end
-  -- Also sweep any other buffer that might carry a stale marker (e.g. the file was
-  -- reopened in a different buffer).
+  M.render_stopped()
+end
+
+-- Repaint every session's stopped marker: sweep the stopped namespace off all buffers
+-- (the only way to drop a removed session's mark without tracking extmark ids), then
+-- re-mark each live location.
+function M.render_stopped()
   for _, b in ipairs(nx.buf.list()) do
     nx.buf.clear_namespace(b, stopped_ns, 0, -1)
+  end
+  local s = cfg.stopped
+  for _, loc in pairs(stopped_locs) do
+    local bufnr = M.path_bufnr(loc.path)
+    if bufnr then
+      local text = nx.buf.lines(bufnr, loc.line - 1, loc.line, false)[1] or ""
+      nx.buf.set_extmark(bufnr, stopped_ns, loc.line - 1, 0, {
+        sign_text = s.text,
+        sign_hl_group = s.hl,
+        end_row = loc.line - 1,
+        end_col = #text,
+        hl_group = s.line_hl,
+        priority = 30,
+      })
+    end
   end
 end
 

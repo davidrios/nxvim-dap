@@ -29,11 +29,21 @@ function M.defaults()
       log_point = { text = "◇", hl = "NxDapLogPoint" },
       stopped = { text = "▶", hl = "NxDapStopped", line_hl = "NxDapStoppedLine" },
     },
-    -- The sidebar dock (threads / stack frames / scopes / variables).
+    -- The sidebar dock (threads / stack frames / scopes / variables / watches /
+    -- exception filters / sessions).
     sidebar = {
       position = "right", -- "left" | "right"
       width = 40,
       open_on_stopped = true, -- auto-open the sidebar when execution stops
+      -- Buffer-local keys inside the sidebar (false on an entry disables it). `<CR>`
+      -- is fixed: it expands a variable, jumps to a frame, toggles an exception
+      -- filter, or switches the active session, depending on the row.
+      mappings = {
+        edit = "e", -- set the value of the variable / watch under the cursor
+        add_watch = "a", -- add a watch expression
+        remove = "x", -- remove the watch under the cursor
+        refresh = "r", -- re-evaluate scopes + watches for the current frame
+      },
     },
     -- The REPL dock.
     repl = {
@@ -47,8 +57,10 @@ function M.defaults()
       step_over = "<F10>",
       step_into = "<F11>",
       step_out = "<F12>",
+      restart = "<F6>",
       toggle_breakpoint = "<leader>db",
       toggle_breakpoint_condition = "<leader>dB",
+      edit_breakpoint = "<leader>de",
       repl_toggle = "<leader>dr",
       sidebar_toggle = "<leader>du",
       terminate = "<leader>dx",
