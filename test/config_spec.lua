@@ -40,12 +40,39 @@ nx.test.describe("nxvim-dap.config validation", function()
       .to_error()
   end)
 
-  nx.test.it("rejects a server adapter loud (no socket transport)", function()
+  nx.test.it("accepts a server (TCP) adapter with a port", function()
     nx.test
       .expect(function()
         config.validate_adapter({ type = "server", host = "127.0.0.1", port = 5678 }, "go")
+      end).never
+      .to_error()
+  end)
+
+  nx.test.it("accepts a server adapter that launches an executable", function()
+    nx.test
+      .expect(function()
+        config.validate_adapter(
+          { type = "server", port = 5678, executable = { command = "dlv", args = { "dap" } } },
+          "go"
+        )
+      end).never
+      .to_error()
+  end)
+
+  nx.test.it("rejects a server adapter with no port", function()
+    nx.test
+      .expect(function()
+        config.validate_adapter({ type = "server", host = "127.0.0.1" }, "go")
       end)
-      .to_error("socket transport")
+      .to_error("port")
+  end)
+
+  nx.test.it("rejects an unknown adapter type loud", function()
+    nx.test
+      .expect(function()
+        config.validate_adapter({ type = "pipe" }, "x")
+      end)
+      .to_error("unknown type")
   end)
 
   nx.test.it("rejects an executable adapter with no command", function()

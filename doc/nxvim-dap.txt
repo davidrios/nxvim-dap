@@ -9,9 +9,9 @@ nvim-dap. It launches a debug adapter as a duplex stdio child via the native
 breakpoints, stepping, a scopes/stack sidebar, and a REPL — all on the `nx.*`
 plugin API.
 
-Only `type = "executable"` adapters (a stdio child) are supported; a
-`type = "server"` (TCP socket) adapter fails loud, since nxvim exposes no
-socket primitive yet.
+Two adapter transports are supported: `type = "executable"` (a duplex stdio
+child over nx.process) and `type = "server"` (a TCP connection over nx.socket,
+optionally launching the adapter executable first).
 
 ==============================================================================
 SETUP                                                       *nxvim-dap-setup*
@@ -33,10 +33,12 @@ SETUP                                                       *nxvim-dap-setup*
 
 ADAPTERS                                                  *nxvim-dap-adapters*
 
-`dap.adapters[name]` is `{ type = "executable", command, args, env, cwd }` or a
-`function(callback, config)` resolver. `dap.configurations[filetype]` is a list
-of `{ type, request = "launch"|"attach", name, ... }` specs; `type` names the
-adapter.
+`dap.adapters[name]` is one of:
+  { type = "executable", command, args, env, cwd }            (a stdio child)
+  { type = "server", host, port, executable = { command, … } } (a TCP server)
+  function(callback, config)                                   (a resolver)
+`dap.configurations[filetype]` is a list of `{ type, request = "launch"|
+"attach", name, ... }` specs; `type` names the adapter.
 
 ==============================================================================
 COMMANDS                                                 *nxvim-dap-commands*

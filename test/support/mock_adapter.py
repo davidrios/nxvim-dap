@@ -1,64 +1,84 @@
 #!/usr/bin/env python3
-# A minimal Debug Adapter Protocol server for nxvim-dap's end-to-end test. It speaks
-# the real Content-Length-framed wire over stdio (the exact path a real adapter uses
-# through nx.process), but its "execution" is scripted: it reports one stopped frame
-# at line 2 of the launched `program`, single steps to line 3, and terminates on
-# continue. Enough to exercise the whole client: handshake, breakpoints, the stopped
-# drill-down (threads/stackTrace/scopes/variables), stepping, evaluate, and teardown.
+# A minimal Debug Adapter Protocol server for nxvim-dap's end-to-end tests. It speaks
+# the real Content-Length-framed wire, but its "execution" is scripted: it reports one
+# stopped frame at line 2 of the launched `program`, single-steps to line 3, and
+# terminates on continue. Enough to exercise the whole client: handshake, breakpoints,
+# the stopped drill-down (threads/stackTrace/scopes/variables), stepping, evaluate,
+# and teardown.
+#
+# Two transports (the two DAP adapter kinds nxvim-dap supports):
+#   * default (no args)      — DAP over stdio (an "executable" adapter).
+#   * --listen --port-file P — bind 127.0.0.1:0, write the chosen port to file P, and
+#                              serve DAP over the accepted TCP socket (a "server"
+#                              adapter). The ephemeral port + port-file let a test
+#                              learn the port with no collision.
 import sys
 import json
+import socket
 
 seq = 0
 program = "unknown"
 current_line = 2
 
 
-def write(msg):
-    global seq
-    seq += 1
-    msg["seq"] = seq
-    data = json.dumps(msg).encode("utf-8")
-    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(data))
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
-
-
-def respond(req, body=None, success=True):
-    write({
-        "type": "response",
-        "request_seq": req["seq"],
-        "success": success,
-        "command": req["command"],
-        "body": body or {},
-    })
-
-
-def event(name, body=None):
-    write({"type": "event", "event": name, "body": body or {}})
-
-
-def read_msg():
-    header = b""
-    while b"\r\n\r\n" not in header:
-        ch = sys.stdin.buffer.read(1)
-        if not ch:
-            return None
-        header += ch
-    length = 0
-    for line in header.decode("utf-8").split("\r\n"):
-        if line.lower().startswith("content-length:"):
-            length = int(line.split(":", 1)[1].strip())
-    body = b""
-    while len(body) < length:
-        chunk = sys.stdin.buffer.read(length - len(body))
-        if not chunk:
-            return None
-        body += chunk
-    return json.loads(body.decode("utf-8"))
+def make_io():
+    """Return (read_fn, write_fn) bound to stdio or a TCP socket per argv."""
+    if "--listen" in sys.argv:
+        port_file = sys.argv[sys.argv.index("--port-file") + 1]
+        srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        with open(port_file, "w") as f:
+            f.write(str(srv.getsockname()[1]))
+        conn, _ = srv.accept()
+        rfile = conn.makefile("rb")
+        wfile = conn.makefile("wb")
+        return rfile.read, wfile.write, wfile.flush
+    return sys.stdin.buffer.read, sys.stdout.buffer.write, sys.stdout.buffer.flush
 
 
 def main():
-    global program, current_line
+    global seq, program, current_line
+    read, raw_write, flush = make_io()
+
+    def write(msg):
+        global seq
+        seq += 1
+        msg["seq"] = seq
+        data = json.dumps(msg).encode("utf-8")
+        raw_write(b"Content-Length: %d\r\n\r\n" % len(data))
+        raw_write(data)
+        flush()
+
+    def respond(req, body=None, success=True):
+        write({
+            "type": "response", "request_seq": req["seq"], "success": success,
+            "command": req["command"], "body": body or {},
+        })
+
+    def event(name, body=None):
+        write({"type": "event", "event": name, "body": body or {}})
+
+    def read_msg():
+        header = b""
+        while b"\r\n\r\n" not in header:
+            ch = read(1)
+            if not ch:
+                return None
+            header += ch
+        length = 0
+        for line in header.decode("utf-8").split("\r\n"):
+            if line.lower().startswith("content-length:"):
+                length = int(line.split(":", 1)[1].strip())
+        body = b""
+        while len(body) < length:
+            chunk = read(length - len(body))
+            if not chunk:
+                return None
+            body += chunk
+        return json.loads(body.decode("utf-8"))
+
     while True:
         req = read_msg()
         if req is None:
@@ -75,8 +95,7 @@ def main():
             respond(req)
         elif cmd == "setBreakpoints":
             bps = args.get("breakpoints", [])
-            verified = [{"verified": True, "line": b.get("line")} for b in bps]
-            respond(req, {"breakpoints": verified})
+            respond(req, {"breakpoints": [{"verified": True, "line": b.get("line")} for b in bps]})
         elif cmd == "setExceptionBreakpoints":
             respond(req)
         elif cmd == "configurationDone":
@@ -94,9 +113,7 @@ def main():
                 "totalFrames": 1,
             })
         elif cmd == "scopes":
-            respond(req, {"scopes": [
-                {"name": "Locals", "variablesReference": 2000, "expensive": False},
-            ]})
+            respond(req, {"scopes": [{"name": "Locals", "variablesReference": 2000, "expensive": False}]})
         elif cmd == "variables":
             respond(req, {"variables": [
                 {"name": "x", "value": "42", "type": "int", "variablesReference": 0},

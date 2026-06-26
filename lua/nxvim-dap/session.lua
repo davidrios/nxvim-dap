@@ -440,53 +440,157 @@ local function resolve_adapter(adapter, config, cb)
   end
 end
 
--- Spawn the adapter for `config` and start the session. `adapter` is looked up by
--- `config.type` by the caller. Returns the session synchronously (the child spawns
--- async, but writes buffer until it's up).
+-- Fire on_terminated once (guarding the flag), used when the transport dies.
+local function terminate_once(session, body)
+  if not session.terminated then
+    session.terminated = true
+    if session.handlers.on_terminated then
+      session.handlers.on_terminated(body or {})
+    end
+  end
+end
+
+-- An EXECUTABLE adapter: a duplex stdio child over nx.process. Its stdout is the DAP
+-- wire; stderr is surfaced as output; its exit ends the session. Starts the session
+-- immediately (writes buffer in the actor until the child is up).
+local function connect_executable(session, resolved, config, handlers)
+  local proc = nx.process.open({
+    cmd = resolved.command,
+    args = resolved.args or {},
+    cwd = resolved.cwd,
+    env = resolved.env,
+    on_stdout = function(chunk)
+      session:feed(chunk)
+    end,
+    on_stderr = function(chunk)
+      -- Adapter diagnostics: surface on the REPL/output stream, not as errors
+      -- (many adapters log routine info to stderr).
+      if handlers.on_output then
+        handlers.on_output("stderr", chunk)
+      end
+    end,
+    on_exit = function(code)
+      terminate_once(session, { exitCode = code })
+    end,
+  })
+  session._chan = proc
+  session._close = function()
+    proc:kill()
+  end
+  session:start(config)
+end
+
+-- A SERVER adapter: optionally launch the adapter executable (it opens the port),
+-- then connect over nx.socket — retrying while the executable comes up — and start
+-- the session once connected. The DAP wire is the socket; the executable's std streams
+-- are surfaced as output.
+local function connect_server(session, resolved, config, handlers)
+  local host = resolved.host or "127.0.0.1"
+  local port = resolved.port
+  local opts = resolved.options or {}
+  local max_retries = opts.max_retries or 14
+  local retry_delay = opts.retry_delay or 250 -- ms
+
+  local exe
+  if resolved.executable then
+    exe = nx.process.open({
+      cmd = resolved.executable.command,
+      args = resolved.executable.args or {},
+      cwd = resolved.executable.cwd,
+      env = resolved.executable.env,
+      on_stdout = function(chunk)
+        if handlers.on_output then
+          handlers.on_output("stdout", chunk)
+        end
+      end,
+      on_stderr = function(chunk)
+        if handlers.on_output then
+          handlers.on_output("stderr", chunk)
+        end
+      end,
+      on_exit = function(code)
+        terminate_once(session, { exitCode = code })
+      end,
+    })
+  end
+
+  local attempt = 0
+  local function try_connect()
+    attempt = attempt + 1
+    local connected = false
+    local sock
+    sock = nx.socket.connect({
+      host = host,
+      port = port,
+      on_connect = function()
+        connected = true
+        session._chan = sock
+        session._close = function()
+          sock:close()
+          if exe then
+            exe:kill()
+          end
+        end
+        session:start(config)
+      end,
+      on_data = function(chunk)
+        session:feed(chunk)
+      end,
+      on_close = function(err)
+        if connected then
+          -- Established then dropped → the session ended.
+          terminate_once(session, {})
+        elseif attempt < max_retries and not session.terminated then
+          -- Not up yet: retry after a short delay (the executable is still binding).
+          nx.timer(try_connect, retry_delay)
+        else
+          notify(
+            session,
+            ("nxvim-dap: could not connect to %s:%d (%s)"):format(host, port, tostring(err)),
+            4
+          )
+          if exe then
+            exe:kill()
+          end
+          terminate_once(session, {})
+        end
+      end,
+    })
+  end
+  try_connect()
+end
+
+-- Spawn/connect the adapter for `config` and start the session. `adapter` is looked
+-- up by `config.type` by the caller (a table or a `function(cb, config)` resolver).
+-- Returns the session synchronously; the transport comes up async.
 function M.spawn(adapter, config, handlers)
   local session
   local transport = {
     write = function(data)
-      if session and session._proc then
-        session._proc:write(data)
+      if session and session._chan then
+        session._chan:write(data)
       end
     end,
     close = function()
-      if session and session._proc then
-        session._proc:kill()
+      if session and session._close then
+        session._close()
       end
     end,
   }
   session = M.new(transport, handlers)
 
   resolve_adapter(adapter, config, function(resolved)
-    require("nxvim-dap.config").validate_adapter(resolved, config.type)
-    local proc = nx.process.open({
-      cmd = resolved.command,
-      args = resolved.args or {},
-      cwd = resolved.cwd,
-      env = resolved.env,
-      on_stdout = function(chunk)
-        session:feed(chunk)
-      end,
-      on_stderr = function(chunk)
-        -- Adapter diagnostics: surface on the REPL/output stream, not as errors
-        -- (many adapters log routine info to stderr).
-        if handlers.on_output then
-          handlers.on_output("stderr", chunk)
-        end
-      end,
-      on_exit = function(code)
-        if not session.terminated then
-          session.terminated = true
-          if handlers.on_terminated then
-            handlers.on_terminated({ exitCode = code })
-          end
-        end
-      end,
-    })
-    session._proc = proc
-    session:start(config)
+    local ok, err = pcall(require("nxvim-dap.config").validate_adapter, resolved, config.type)
+    if not ok then
+      notify(session, tostring(err), 4)
+      terminate_once(session, {})
+      return
+    end
+    if (resolved.type or "executable") == "server" then
+      connect_server(session, resolved, config, handlers)
+    else
+      connect_executable(session, resolved, config, handlers)
+    end
   end)
 
   return session

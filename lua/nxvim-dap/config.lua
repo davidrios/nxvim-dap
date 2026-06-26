@@ -5,11 +5,15 @@
 --   * `adapters[type]`        — HOW to reach a debug adapter (a process to spawn).
 --   * `configurations[ft]`    — WHAT to debug for a filetype (launch/attach specs).
 --
--- An adapter is either a table `{ type = "executable", command, args, env, cwd }`
--- (the only transport nxvim-dap ships — a duplex child over `nx.process`; a `server`
--- adapter would need a TCP socket primitive nxvim doesn't expose yet, so it fails
--- LOUD rather than pretending) or a `function(callback, config)` that resolves one
--- dynamically (nvim-dap's enrich-on-launch hook).
+-- An adapter is one of:
+--   * `{ type = "executable", command, args, env, cwd }` — a duplex child over
+--     `nx.process` (the adapter speaks DAP on its own stdio).
+--   * `{ type = "server", host, port, executable = { command, args, … } }` — a TCP
+--     connection over `nx.socket`; the optional `executable` is launched first (it
+--     opens the port) and the client connects to `host:port` (default 127.0.0.1),
+--     retrying while it comes up. The nvim-dap "server" adapter.
+--   * `function(callback, config)` — a resolver producing one of the above
+--     dynamically (nvim-dap's enrich-on-launch hook).
 
 local M = {}
 
@@ -105,19 +109,23 @@ function M.validate_adapter(adapter, type_name)
     )
   end
   local kind = adapter.type or "executable"
-  if kind == "server" or kind == "pipe" then
-    error(
-      ("nxvim-dap: adapter %q has type=%q, which needs a socket transport nxvim does not expose; "):format(
-        type_name,
-        kind
-      ) .. "only type='executable' (a duplex stdio child) is supported"
-    )
-  end
-  if kind ~= "executable" then
+  if kind == "executable" then
+    if type(adapter.command) ~= "string" or adapter.command == "" then
+      error(("nxvim-dap: executable adapter %q needs a string `command`"):format(type_name))
+    end
+  elseif kind == "server" then
+    if type(adapter.port) ~= "number" then
+      error(("nxvim-dap: server adapter %q needs a numeric `port`"):format(type_name))
+    end
+    if adapter.executable ~= nil then
+      if type(adapter.executable) ~= "table" or type(adapter.executable.command) ~= "string" then
+        error(
+          ("nxvim-dap: server adapter %q `executable` needs a string `command`"):format(type_name)
+        )
+      end
+    end
+  else
     error(("nxvim-dap: adapter %q has unknown type=%q"):format(type_name, kind))
-  end
-  if type(adapter.command) ~= "string" or adapter.command == "" then
-    error(("nxvim-dap: executable adapter %q needs a string `command`"):format(type_name))
   end
 end
 

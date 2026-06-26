@@ -120,4 +120,52 @@ nx.test.describe("nxvim-dap end-to-end (real adapter over nx.process)", function
       return dap.session() == nil
     end, { tries = 300, interval = 20, message = "session did not terminate" })
   end)
+
+  nx.test.it("connects to a server (TCP) adapter and runs the same flow", function(t)
+    local dir = nx.test.tempdir()
+    local prog = dir .. "/prog3.py"
+    nx.await(nx.fs.write(prog, "x = 1\ny = 2\n"))
+    local port_file = dir .. "/port"
+
+    -- Launch the mock in server mode: it binds an ephemeral TCP port and writes it to
+    -- port_file. (The test owns the process; the adapter config has no `executable`,
+    -- so the plugin just connects.)
+    local server = nx.process.open({
+      cmd = "python3",
+      args = { MOCK, "--listen", "--port-file", port_file },
+    })
+
+    -- Poll for the announced port (the file appears once the server is bound).
+    local port
+    for _ = 1, 200 do
+      local ok, data = pcall(function()
+        return nx.await(nx.fs.read_text(port_file))
+      end)
+      if ok and data and tonumber(data) then
+        port = tonumber(data)
+        break
+      end
+      nx.await(nx.promise.delay(20))
+    end
+    nx.test.expect(port).never.to_be_nil()
+
+    t:cmd("edit " .. prog)
+    dap.adapters.srv = { type = "server", host = "127.0.0.1", port = port }
+    dap.run({ type = "srv", request = "launch", name = "srv launch", program = prog })
+
+    wait_stopped(t, 2)
+    nx.test.expect(dap.session().current_frame.name).to_be("main")
+    nx.test.expect(dap.session().capabilities.supportsConfigurationDoneRequest).to_be_truthy()
+
+    -- Step + continue work the same over the socket.
+    dap.step_over()
+    wait_stopped(t, 3)
+
+    dap.continue()
+    t:wait_for(function()
+      return dap.session() == nil
+    end, { tries = 300, interval = 20, message = "server session did not terminate" })
+
+    server:kill()
+  end)
 end)

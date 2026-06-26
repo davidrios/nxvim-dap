@@ -31,10 +31,10 @@ nor `nx.run_stream` (read-only, newline-split) can carry a framed protocol, so t
 the same transport an in-Lua language-server client would need. nxvim-dap is the first
 consumer.
 
-> Adapters that only speak over a TCP socket (`type = "server"`) are **not** supported
-> yet — nxvim exposes no socket primitive, so such an adapter fails *loud* at config
-> time rather than silently never connecting. `type = "executable"` (a stdio child) is
-> the supported transport, which covers debugpy, delve (`dlv dap`), and most adapters.
+Adapters that speak over a TCP socket (`type = "server"`, e.g. codelldb, js-debug, or
+delve when run as a server) ride nxvim's `nx.socket.connect` — a duplex TCP sibling of
+`nx.process`. nxvim-dap optionally launches the adapter executable (it opens the port),
+then connects to `host:port`, retrying while it comes up. So both adapter kinds work.
 
 ## Features
 
@@ -127,6 +127,15 @@ local dap = require("nxvim-dap")
 
 -- An adapter is an executable (a stdio child) …
 dap.adapters.lldb = { type = "executable", command = "lldb-dap" }
+
+-- … a TCP server the client connects to (optionally launching it first) …
+dap.adapters.codelldb = {
+  type = "server",
+  host = "127.0.0.1",
+  port = 13000,
+  executable = { command = "codelldb", args = { "--port", "13000" } },
+  -- options = { max_retries = 14, retry_delay = 250 },  -- while the port comes up
+}
 
 -- … or a function resolving one dynamically:
 dap.adapters.python = function(callback, _config)
