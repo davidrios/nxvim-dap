@@ -35,6 +35,14 @@ function M.is_open()
   return view ~= nil and view:winid() ~= nil
 end
 
+-- The REPL's backing buffer / 1-based cursor line (or nil before it exists). For tests.
+function M.bufnr()
+  return view and view:bufnr()
+end
+function M.cursor_line()
+  return view and view:line()
+end
+
 function M.open()
   ensure_view()
   if not M.is_open() then
