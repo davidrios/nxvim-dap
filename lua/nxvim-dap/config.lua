@@ -1,0 +1,146 @@
+-- nxvim-dap configuration: the defaults, the adapter/configuration registries, and a
+-- validated merge. Mirrors nvim-dap's two-table model so a ported debug setup reads
+-- the same:
+--
+--   * `adapters[type]`        — HOW to reach a debug adapter (a process to spawn).
+--   * `configurations[ft]`    — WHAT to debug for a filetype (launch/attach specs).
+--
+-- An adapter is either a table `{ type = "executable", command, args, env, cwd }`
+-- (the only transport nxvim-dap ships — a duplex child over `nx.process`; a `server`
+-- adapter would need a TCP socket primitive nxvim doesn't expose yet, so it fails
+-- LOUD rather than pretending) or a `function(callback, config)` that resolves one
+-- dynamically (nvim-dap's enrich-on-launch hook).
+
+local M = {}
+
+-- The plugin-wide defaults (everything `setup()` understands except the registries,
+-- which start empty and are filled by the user / a language extension).
+function M.defaults()
+  return {
+    -- UI / sign appearance.
+    signs = {
+      breakpoint = { text = "●", hl = "NxDapBreakpoint" },
+      breakpoint_condition = { text = "◆", hl = "NxDapBreakpointCondition" },
+      breakpoint_rejected = { text = "○", hl = "NxDapBreakpointRejected" },
+      log_point = { text = "◇", hl = "NxDapLogPoint" },
+      stopped = { text = "▶", hl = "NxDapStopped", line_hl = "NxDapStoppedLine" },
+    },
+    -- The sidebar dock (threads / stack frames / scopes / variables).
+    sidebar = {
+      position = "right", -- "left" | "right"
+      width = 40,
+      open_on_stopped = true, -- auto-open the sidebar when execution stops
+    },
+    -- The REPL dock.
+    repl = {
+      position = "bottom", -- "bottom" | "left" | "right"
+      height = 12,
+      open_on_start = true, -- auto-open the REPL when a session starts
+    },
+    -- Default keymaps (false on any entry, or `mappings = false`, disables it).
+    mappings = {
+      continue = "<F5>",
+      step_over = "<F10>",
+      step_into = "<F11>",
+      step_out = "<F12>",
+      toggle_breakpoint = "<leader>db",
+      toggle_breakpoint_condition = "<leader>dB",
+      repl_toggle = "<leader>dr",
+      sidebar_toggle = "<leader>du",
+      terminate = "<leader>dx",
+    },
+    -- Highlight-group overrides (merged over the fallback palette).
+    highlights = {},
+    -- Auto-jump the editor to the stopped frame's source line.
+    jump_to_stopped = true,
+    -- The adapter + configuration registries (filled via setup or the public
+    -- `adapters` / `configurations` tables — see init.lua).
+    adapters = {},
+    configurations = {},
+  }
+end
+
+-- Deep-ish merge: `over` wins, tables recurse, everything else replaces. Lists
+-- (`adapters`/`configurations` entries, `args`) replace wholesale — merging a list
+-- positionally is never what a user means.
+-- A non-empty sequence (array). An EMPTY table is treated as a map (so merging an
+-- empty override — e.g. `setup({})` — keeps the base rather than wiping it).
+local function is_list(t)
+  return type(t) == "table" and t[1] ~= nil
+end
+
+local function merge(base, over)
+  if type(base) ~= "table" or type(over) ~= "table" then
+    return over == nil and base or over
+  end
+  if is_list(over) then
+    return over
+  end
+  local out = {}
+  for k, v in pairs(base) do
+    out[k] = v
+  end
+  for k, v in pairs(over) do
+    if type(v) == "table" and type(out[k]) == "table" then
+      out[k] = merge(out[k], v)
+    else
+      out[k] = v
+    end
+  end
+  return out
+end
+
+M.merge = merge
+
+-- Validate an adapter spec, failing LOUD on anything nxvim-dap can't honor (the
+-- no-silent-stubs discipline — a "server" adapter must error at config time, not
+-- silently never connect).
+function M.validate_adapter(adapter, type_name)
+  if type(adapter) == "function" then
+    return -- a resolver: validated when it produces a concrete adapter
+  end
+  if type(adapter) ~= "table" then
+    error(
+      ("nxvim-dap: adapter %q must be a table or function, got %s"):format(type_name, type(adapter))
+    )
+  end
+  local kind = adapter.type or "executable"
+  if kind == "server" or kind == "pipe" then
+    error(
+      ("nxvim-dap: adapter %q has type=%q, which needs a socket transport nxvim does not expose; "):format(
+        type_name,
+        kind
+      ) .. "only type='executable' (a duplex stdio child) is supported"
+    )
+  end
+  if kind ~= "executable" then
+    error(("nxvim-dap: adapter %q has unknown type=%q"):format(type_name, kind))
+  end
+  if type(adapter.command) ~= "string" or adapter.command == "" then
+    error(("nxvim-dap: executable adapter %q needs a string `command`"):format(type_name))
+  end
+end
+
+-- Validate a launch/attach configuration. Returns it (so callers can `cfg =
+-- validate_configuration(cfg)`), erroring on a missing required field.
+function M.validate_configuration(cfg)
+  if type(cfg) ~= "table" then
+    error("nxvim-dap: a configuration must be a table")
+  end
+  if type(cfg.type) ~= "string" then
+    error("nxvim-dap: a configuration needs a string `type` (the adapter key)")
+  end
+  if cfg.request ~= "launch" and cfg.request ~= "attach" then
+    error(
+      ("nxvim-dap: configuration %q needs request='launch' or 'attach'"):format(
+        cfg.name or cfg.type
+      )
+    )
+  end
+  if type(cfg.name) ~= "string" then
+    error("nxvim-dap: a configuration needs a string `name`")
+  end
+  return cfg
+end
+
+return M

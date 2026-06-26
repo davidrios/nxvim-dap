@@ -1,0 +1,113 @@
+-- The breakpoint store: the source of truth for where breakpoints are, independent
+-- of any running session. Toggling updates the store, repaints that file's signs,
+-- and (via the `on_change` hook init.lua installs) pushes the new set to a live
+-- session. A session's `_configure` reads the whole store through `M.list` to seed
+-- breakpoints at launch.
+
+local signs = require("nxvim-dap.signs")
+
+local M = {}
+
+-- abspath -> list of { line, condition?, logMessage?, hitCondition? }
+M.store = {}
+
+-- on_change(path, bps): called after any mutation so init.lua can push the file's
+-- breakpoints to an active session. Set by init.lua; a no-op until then.
+M.on_change = nil
+
+local function fire(path)
+  if M.on_change then
+    M.on_change(path, M.store[path] or {})
+  end
+end
+
+-- The current buffer's absolute path + cursor line (1-based), or nil if the buffer
+-- has no file.
+local function here()
+  local bufnr = nx.buf.current()
+  local name = nx.buf.name(bufnr)
+  if not name or name == "" then
+    return nil
+  end
+  local cur = nx.cursor.get(nx.win.current())
+  local line = (cur and (cur.row or cur[1])) or 1
+  return signs.abspath(name), line
+end
+
+local function index_at(bps, line)
+  for i, bp in ipairs(bps) do
+    if bp.line == line then
+      return i
+    end
+  end
+end
+
+-- Toggle (or set) a breakpoint at the cursor. `opts.condition` / `opts.logMessage`
+-- set a conditional / log point — passing one when a plain breakpoint already exists
+-- there UPGRADES it rather than removing it.
+function M.toggle(opts)
+  opts = opts or {}
+  local path, line = here()
+  if not path then
+    nx.notify("nxvim-dap: no file in the current buffer", 3)
+    return
+  end
+  local bps = M.store[path] or {}
+  M.store[path] = bps
+  local at = index_at(bps, line)
+  if at then
+    if opts.condition or opts.logMessage then
+      bps[at].condition = opts.condition
+      bps[at].logMessage = opts.logMessage
+      bps[at].hitCondition = opts.hitCondition
+    else
+      table.remove(bps, at)
+    end
+  else
+    bps[#bps + 1] = {
+      line = line,
+      condition = opts.condition,
+      logMessage = opts.logMessage,
+      hitCondition = opts.hitCondition,
+    }
+    table.sort(bps, function(a, b)
+      return a.line < b.line
+    end)
+  end
+  if #bps == 0 then
+    M.store[path] = nil
+    signs.clear_breakpoints(path)
+  else
+    signs.render_breakpoints(path, bps)
+  end
+  fire(path)
+end
+
+-- Remove every breakpoint (and its signs), firing a change per affected file so a
+-- session clears them too.
+function M.clear_all()
+  local paths = {}
+  for path in pairs(M.store) do
+    paths[#paths + 1] = path
+  end
+  for _, path in ipairs(paths) do
+    M.store[path] = nil
+    signs.clear_breakpoints(path)
+    fire(path)
+  end
+end
+
+-- The whole store (the session's `get_breakpoints`).
+function M.list()
+  return M.store
+end
+
+-- Repaint signs for every file that has breakpoints (e.g. after a buffer opens, so
+-- its gutter shows the breakpoints set while it was closed).
+function M.render_all()
+  for path, bps in pairs(M.store) do
+    signs.render_breakpoints(path, bps)
+  end
+end
+
+return M

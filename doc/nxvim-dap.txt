@@ -1,0 +1,91 @@
+*nxvim-dap.txt*  A Debug Adapter Protocol client for nxvim
+
+==============================================================================
+INTRODUCTION                                                      *nxvim-dap*
+
+nxvim-dap is a Debug Adapter Protocol (DAP) client — the nxvim sibling of
+nvim-dap. It launches a debug adapter as a duplex stdio child via the native
+`nx.process` API, frames the Content-Length JSON wire itself, and drives
+breakpoints, stepping, a scopes/stack sidebar, and a REPL — all on the `nx.*`
+plugin API.
+
+Only `type = "executable"` adapters (a stdio child) are supported; a
+`type = "server"` (TCP socket) adapter fails loud, since nxvim exposes no
+socket primitive yet.
+
+==============================================================================
+SETUP                                                       *nxvim-dap-setup*
+
+>lua
+    local dap = require("nxvim-dap")
+    dap.setup({})
+    dap.adapters.python = {
+      type = "executable",
+      command = "python3",
+      args = { "-m", "debugpy.adapter" },
+    }
+    dap.configurations.python = {
+      { type = "python", request = "launch", name = "Launch file",
+        program = "${file}" },
+    }
+<
+`setup()` is re-runnable (a full reconfigure). See the README for every option.
+
+ADAPTERS                                                  *nxvim-dap-adapters*
+
+`dap.adapters[name]` is `{ type = "executable", command, args, env, cwd }` or a
+`function(callback, config)` resolver. `dap.configurations[filetype]` is a list
+of `{ type, request = "launch"|"attach", name, ... }` specs; `type` names the
+adapter.
+
+==============================================================================
+COMMANDS                                                 *nxvim-dap-commands*
+
+:DapContinue            Start debugging, or resume a stopped session.
+:DapStepOver            Step over.
+:DapStepInto            Step into.
+:DapStepOut             Step out.
+:DapPause               Pause a running thread.
+:DapTerminate           End the session.
+:DapToggleBreakpoint    Toggle a breakpoint at the cursor.
+:DapBreakpointCondition Set a conditional breakpoint.
+:DapLogPoint            Set a log point.
+:DapClearBreakpoints    Remove every breakpoint.
+:DapReplToggle          Toggle the REPL / console.
+:DapSidebarToggle       Toggle the scopes / stack sidebar.
+:DapEval [expr]         Evaluate an expression in the stopped frame.
+
+==============================================================================
+MAPPINGS                                                 *nxvim-dap-mappings*
+
+Defaults (rebind / disable via `opts.mappings`):
+
+    <F5>          continue / start        <leader>db   toggle breakpoint
+    <F10>         step over               <leader>dB   conditional breakpoint
+    <F11>         step into               <leader>dr   toggle REPL
+    <F12>         step out                <leader>du   toggle sidebar
+    <leader>dx    terminate
+
+==============================================================================
+API                                                           *nxvim-dap-api*
+
+require("nxvim-dap"):
+    setup(opts)                 continue()            run(config)
+    step_over() step_into() step_out()  pause()  terminate()
+    toggle_breakpoint()         set_breakpoint_condition()
+    clear_breakpoints()         repl_toggle()         sidebar_toggle()
+    eval(expr)                  session()
+    adapters  configurations    (the registries — assign into them)
+
+==============================================================================
+HIGHLIGHTS                                             *nxvim-dap-highlights*
+
+Defined as fallbacks (a colorscheme / `opts.highlights` wins):
+
+    NxDapBreakpoint  NxDapBreakpointCondition  NxDapLogPoint
+    NxDapStopped  NxDapStoppedLine
+    NxDapUIScope  NxDapUIThread  NxDapUIFrame  NxDapUIFrameCurrent
+    NxDapUIVarName  NxDapUIVarType  NxDapUIValue
+    NxDapReplPrompt  NxDapReplError
+
+vim:tw=78:ts=8:ft=help:norl:
