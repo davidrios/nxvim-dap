@@ -35,12 +35,23 @@ function M.is_open()
   return view ~= nil and view:winid() ~= nil
 end
 
--- The REPL's backing buffer / 1-based cursor line (or nil before it exists). For tests.
+-- The REPL's backing buffer / window / 1-based cursor line (or nil before it exists).
+-- For tests and the focus check.
 function M.bufnr()
   return view and view:bufnr()
 end
+function M.winid()
+  return view and view:winid()
+end
 function M.cursor_line()
   return view and view:line()
+end
+
+-- Whether the REPL is the focused window right now — the gate for auto-scrolling. Output
+-- events shouldn't tail (and steal focus) while you're editing elsewhere.
+local function is_focused()
+  local win = view and view:winid()
+  return win ~= nil and win == nx.win.current()
 end
 
 function M.open()
@@ -71,8 +82,11 @@ function M.render()
   end
   view:set_lines(#lines > 0 and lines or { "" })
   view:set_decor(ns, marks)
-  -- Keep the newest output in view.
-  if M.is_open() and #lines > 0 then
+  -- Tail the newest line, but ONLY while the REPL is the focused window — `set_cursor`
+  -- focuses the view, so doing it on every render would let adapter output yank the
+  -- cursor / steal focus while you're editing elsewhere. When the REPL is focused (you
+  -- just evaluated, or you're reading it) it follows the output as before.
+  if #lines > 0 and is_focused() then
     view:set_cursor(#lines)
   end
 end
@@ -162,6 +176,18 @@ function M.clear()
   if view then
     M.render()
   end
+end
+
+-- Tear the REPL fully down — drop its view (and dock) and scrollback — so it starts from
+-- a clean slate. For tests that need a hermetic REPL independent of any prior session.
+function M._reset()
+  if view then
+    view:close()
+    view = nil
+  end
+  lines = {}
+  marks = {}
+  pending = ""
 end
 
 return M

@@ -9,7 +9,7 @@ local repl = require("nxvim-dap.repl")
 nx.test.describe("nxvim-dap repl", function()
   nx.test.before_each(function()
     dap.setup({})
-    repl.clear()
+    repl._reset() -- a fresh view + dock, independent of any prior spec's session
   end)
 
   nx.test.it("keeps the cursor on the newest line after evaluating", function(t)
@@ -35,5 +35,20 @@ nx.test.describe("nxvim-dap repl", function()
     nx.test.expect(n).to_be(10) -- 8 seeded + 2 from the eval
     -- …and the cursor is on the newest line, not still at the top (the bug left it up).
     nx.test.expect(repl.cursor_line()).to_be(n)
+  end)
+
+  nx.test.it("does not steal focus when output arrives while editing elsewhere", function(t)
+    repl.open() -- opens + focuses the repl (bottom dock)
+    nx.layer.main() -- leave it for the main editor
+    t:sleep(40) -- let the focus switch settle into the mirrors
+
+    local replwin = repl.winid()
+    local before = nx.win.current()
+    nx.test.expect(before).never.to_be(replwin) -- we're in the main area, not the repl
+
+    -- Adapter output arrives while we're editing elsewhere — it must not pull focus.
+    repl.append_output("stdout", "async program output\n")
+    t:sleep(40)
+    nx.test.expect(nx.win.current()).to_be(before)
   end)
 end)
