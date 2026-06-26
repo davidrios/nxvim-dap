@@ -58,10 +58,21 @@ session starts (recursing into nested tables / `args` lists):
   ${cwd}                      the working directory
   ${env:NAME}                 the NAME environment variable ("" when unset)
 
-An unrecognised `${...}` is left as-is and warned about (the VSCode
-`${input:…}` / `${command:…}` prompts are not supported). A value may also be a
-function returning a string — called synchronously at launch and its result
-expanded in turn — for a dynamically computed path.
+A value may also be a function returning a string — called synchronously at
+launch and its result expanded in turn — for a dynamically computed path.
+
+The interactive VSCode forms resolve with a prompt at launch:
+
+  ${input:id}    looks up `config.inputs[id]` (the launch.json shape
+                 { id, type, description?, default?, options?, command?, args? })
+                 and prompts per `type`: promptString (text), pickString (a menu
+                 over `options`), or command (run a registered command).
+  ${command:id}  runs a handler registered with `dap.register_command(id, fn)`;
+                 fn(args, config) returns a string or a promise of one.
+
+Each id is prompted once per launch. A missing definition, an unsupported input
+type, or a cancelled prompt aborts the launch; any other unrecognised `${...}`
+is left as-is and warned about.
 
 ==============================================================================
 COMMANDS                                                 *nxvim-dap-commands*
@@ -113,7 +124,7 @@ API                                                           *nxvim-dap-api*
 
 require("nxvim-dap"):
     setup(opts)                 continue()            run(config)
-    restart()
+    register_command(id, fn)    restart()
     step_over() step_into() step_out()  pause()
     terminate() terminate_all()
     session() sessions()  set_active_session(s)  pick_session()

@@ -178,21 +178,45 @@ session starts, so the nvim-dap idiom works as written:
 | `${workspaceFolder}` / `${workspaceFolderBasename}` / `${cwd}` | the working directory / its basename |
 | `${env:NAME}` | the `NAME` environment variable (`""` when unset) |
 
-Expansion recurses into nested tables and `args` lists. An unrecognised `${...}` is left
-as-is and a warning is shown (the VSCode `${input:…}` / `${command:…}` prompts aren't
-supported). A value may also be a **function returning a string** — called synchronously
-at launch, its result expanded in turn — for a path computed dynamically:
+Expansion recurses into nested tables and `args` lists. A value may also be a **function
+returning a string** — called synchronously at launch, its result expanded in turn — for a
+path computed dynamically:
 
 ```lua
-dap.configurations.python = {
-  { type = "python", request = "launch", name = "Launch file", program = "${file}" },
-  { type = "python", request = "launch", name = "Built binary",
-    program = function() return vim.fn.getcwd() .. "/build/app" end },
-}
+program = function() return vim.fn.getcwd() .. "/build/app" end  -- synchronous: return a string
 ```
 
-(The function runs in the editor tick, so it must be synchronous — return a string, don't
-block or await.)
+The interactive VSCode forms work too (resolved with a prompt at launch):
+
+| Token | Resolves by |
+| --- | --- |
+| `${input:id}` | looking up `config.inputs[id]` and prompting per its `type` |
+| `${command:id}` | running a handler registered with `dap.register_command(id, fn)` |
+
+An `input` is the launch.json shape — `{ id, type, description?, default?, options?,
+command?, args? }` — with `type` one of `promptString` (a text prompt), `pickString` (a
+menu over `options`), or `command` (run a registered command). Each id is prompted once per
+launch. A `${command:id}` handler `fn(args, config)` returns a string (or a promise of
+one). A missing definition, an unsupported type, or a cancelled prompt aborts the launch;
+any other unrecognised `${...}` is left as-is and a warning is shown.
+
+```lua
+dap.register_command("pickProcess", function()
+  return tostring(vim.fn.getpid()) -- or return a promise for an async pick
+end)
+
+dap.configurations.python = {
+  { type = "python", request = "launch", name = "Launch file", program = "${file}" },
+  {
+    type = "python", request = "launch", name = "Launch with args",
+    program = "${file}",
+    args = "${input:scriptArgs}",
+    inputs = {
+      { id = "scriptArgs", type = "promptString", description = "Arguments", default = "" },
+    },
+  },
+}
+```
 
 ### Commands
 
@@ -253,6 +277,7 @@ require("nxvim-dap").setup({
 | `setup(opts)`                   | configure (re-runnable)                        |
 | `continue()`                    | start debugging / resume                       |
 | `run(config)`                   | start a specific launch/attach configuration (a new concurrent session) |
+| `register_command(id, fn)`      | register a `${command:id}` handler             |
 | `restart()`                     | restart the active session                     |
 | `step_over()` / `step_into()` / `step_out()` | stepping                          |
 | `pause()` / `terminate()` / `terminate_all()` | pause / end one / end all       |

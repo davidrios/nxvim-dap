@@ -45,6 +45,9 @@ M.config = config_mod.defaults()
 -- The public registries (nvim-dap parity): users assign into these directly.
 M.adapters = {}
 M.configurations = {}
+-- Command handlers for `${command:id}` config tokens: id -> function(args, config) that
+-- returns a string (or a promise of one). Populate via `dap.register_command`.
+M.commands = {}
 
 -- Multiple concurrent sessions: `M._sessions` is the registry (id -> session) and
 -- `M._session` is the ACTIVE one — the session the UI mirrors and the commands target.
@@ -189,18 +192,20 @@ end
 
 -- Start a concrete launch/attach `config` (resolving its adapter by `config.type`) as a
 -- NEW concurrent session, made active. Prior sessions keep running.
+--
+-- Configuration values are expanded first (see variables.lua): `${file}` /
+-- `${workspaceFolder}` / … and callable field values resolve synchronously; the
+-- interactive `${input:…}` / `${command:…}` forms then resolve in an async pass (which
+-- may prompt) before the session is spawned. The synchronous case (no prompts) starts the
+-- session immediately and returns it; the interactive case returns nil and starts once the
+-- prompts are answered.
 function M.run(config)
   config = config_mod.validate_configuration(config)
-  -- Resolve `${file}` / `${workspaceFolder}` / … and any callable field values against
-  -- the current context before the config reaches the adapter (see variables.lua). A
-  -- failing dynamic-value function aborts the launch loud; an unrecognised `${...}` is
-  -- left as-is and warned about.
-  local ok, expanded, unknown = pcall(variables.expand, config)
+  local ok, expanded, unknown, has_dynamic = pcall(variables.expand, config)
   if not ok then
-    nx.notify(tostring(expanded), 4)
+    nx.notify(tostring(expanded), 4) -- a callable field value errored
     return
   end
-  config = expanded
   if #unknown > 0 then
     nx.notify(
       "nxvim-dap: unrecognised config variable(s) left as-is: ${"
@@ -209,6 +214,21 @@ function M.run(config)
       3
     )
   end
+  if not has_dynamic then
+    return M._start(expanded) -- no prompts: start synchronously
+  end
+  -- Interactive `${input:…}` / `${command:…}`: prompt, then start. A rejection (a missing
+  -- definition, an unsupported type, or a cancelled prompt) aborts the launch loud.
+  variables.resolve_dynamic(expanded, { commands = M.commands }):next(function(final)
+    M._start(final)
+  end, function(err)
+    nx.notify("nxvim-dap: " .. tostring(err and err.message or err), 4)
+  end)
+end
+
+-- Spawn the session for a fully-expanded `config` (the shared tail of both M.run paths).
+function M._start(config)
+  config.inputs = nil -- a UI-only field; never sent to the adapter
   local adapter = M.adapters[config.type]
   if not adapter then
     nx.notify(("nxvim-dap: no adapter registered for type %q"):format(config.type), 4)
@@ -241,6 +261,17 @@ function M.run(config)
   ui.clear()
   M._set_active(session)
   return session
+end
+
+-- Register a `${command:id}` handler. `fn(args, config)` is called when a configuration
+-- references `${command:id}`; it returns the substituted string (or a promise of one).
+-- `args` is the optional `args` of a `type = "command"` input, `config` the launch config.
+function M.register_command(id, fn)
+  if type(id) ~= "string" or type(fn) ~= "function" then
+    nx.notify("nxvim-dap: register_command(id, fn) needs a string id and a function", 4)
+    return
+  end
+  M.commands[id] = fn
 end
 
 -- Restart the active session: in place via the adapter's `restart` request when it is

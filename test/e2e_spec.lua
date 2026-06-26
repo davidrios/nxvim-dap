@@ -145,6 +145,61 @@ nx.test.describe("nxvim-dap end-to-end (real adapter over nx.process)", function
     end, { tries = 300, interval = 20, message = "session did not terminate" })
   end)
 
+  nx.test.it("prompts for an ${input:…} and launches with the answer", function(t)
+    local dir = nx.test.tempdir()
+    local prog = dir .. "/in.py"
+    nx.await(nx.fs.write(prog, "x = 1\n"))
+
+    dap.setup({})
+    dap.adapters.mock = { command = "python3", args = { MOCK } }
+    -- `program` references an input; M.run prompts, then launches with the answer.
+    dap.run({
+      type = "mock",
+      request = "launch",
+      name = "prompted",
+      program = "${input:prog}",
+      inputs = { { id = "prog", type = "promptString", description = "Program" } },
+    })
+    t:feed(prog .. "<CR>") -- answer the prompt with the real path
+    wait_stopped(t, 2)
+
+    nx.test.expect(dap.session().config.program).to_be(prog)
+    nx.test.expect(dap.session().config.inputs).to_be_nil() -- a UI-only field, stripped
+    -- The adapter received the resolved path (echoed as the frame's source).
+    nx.test.expect(dap.session().current_frame.source.path).to_be(prog)
+
+    dap.terminate()
+    t:wait_for(function()
+      return dap.session() == nil
+    end, { tries = 300, interval = 20, message = "session did not terminate" })
+  end)
+
+  nx.test.it("resolves a ${command:…} from a registered command at launch", function(t)
+    local dir = nx.test.tempdir()
+    local prog = dir .. "/cmd.py"
+    nx.await(nx.fs.write(prog, "x = 1\n"))
+
+    dap.setup({})
+    dap.adapters.mock = { command = "python3", args = { MOCK } }
+    dap.register_command("pickProgram", function()
+      return prog
+    end)
+    dap.run({
+      type = "mock",
+      request = "launch",
+      name = "via-command",
+      program = "${command:pickProgram}",
+    })
+    wait_stopped(t, 2)
+    nx.test.expect(dap.session().config.program).to_be(prog)
+    nx.test.expect(dap.session().current_frame.source.path).to_be(prog)
+
+    dap.terminate()
+    t:wait_for(function()
+      return dap.session() == nil
+    end, { tries = 300, interval = 20, message = "session did not terminate" })
+  end)
+
   nx.test.it("sets a variable's value over the live adapter (setVariable)", function(t)
     local dir = nx.test.tempdir()
     local prog = dir .. "/v.py"

@@ -125,4 +125,170 @@ nx.test.describe("nxvim-dap.variables expansion", function()
     nx.test.expect(ok).to_be(false)
     nx.test.expect(tostring(err):find("boom", 1, true)).never.to_be_nil()
   end)
+
+  nx.test.it("flags an ${input:…}/${command:…} as dynamic, leaving it for resolve", function(t)
+    open_in(t, nx.test.tempdir(), "a.py")
+    local out, _unknown, has_dynamic = variables.expand({ program = "${input:p}", x = "${file}" })
+    nx.test.expect(has_dynamic).to_be(true)
+    nx.test.expect(out.program).to_be("${input:p}") -- left intact for the async pass
+  end)
+end)
+
+nx.test.describe("nxvim-dap.variables dynamic (input/command) resolution", function()
+  local function open(t)
+    local dir = nx.test.tempdir()
+    nx.await(nx.fs.write(dir .. "/a.py", "x = 1\n"))
+    t:cmd("edit " .. dir .. "/a.py")
+  end
+
+  nx.test.it("resolves ${command:id} from the command registry", function(t)
+    open(t)
+    local resolved
+    variables
+      .resolve_dynamic({ program = "${command:pickProg}" }, {
+        commands = {
+          pickProg = function()
+            return "/built/app"
+          end,
+        },
+      })
+      :next(function(c)
+        resolved = c
+      end)
+    t:wait_for(function()
+      return resolved
+    end, { tries = 100, interval = 20, message = "command did not resolve" })
+    nx.test.expect(resolved.program).to_be("/built/app")
+  end)
+
+  nx.test.it("awaits a ${command:id} that returns a promise", function(t)
+    open(t)
+    local resolved
+    variables
+      .resolve_dynamic({ program = "${command:async}" }, {
+        commands = {
+          async = function()
+            return nx.promise.new(function(resolve)
+              nx.on_next_tick(function()
+                resolve("/deferred")
+              end)
+            end)
+          end,
+        },
+      })
+      :next(function(c)
+        resolved = c
+      end)
+    t:wait_for(function()
+      return resolved
+    end, { tries = 100, interval = 20, message = "async command did not resolve" })
+    nx.test.expect(resolved.program).to_be("/deferred")
+  end)
+
+  nx.test.it("prompts for an ${input:id} promptString", function(t)
+    open(t)
+    local resolved
+    variables
+      .resolve_dynamic({
+        program = "${input:path}",
+        inputs = { { id = "path", type = "promptString", description = "Path" } },
+      }, {})
+      :next(function(c)
+        resolved = c
+      end)
+    t:feed("/typed/path<CR>")
+    t:wait_for(function()
+      return resolved
+    end, { tries = 100, interval = 20, message = "promptString did not resolve" })
+    nx.test.expect(resolved.program).to_be("/typed/path")
+  end)
+
+  nx.test.it("offers a menu for an ${input:id} pickString", function(t)
+    open(t)
+    local resolved
+    variables
+      .resolve_dynamic({
+        mode = "${input:m}",
+        inputs = {
+          { id = "m", type = "pickString", description = "Mode", options = { "debug", "release" } },
+        },
+      }, {})
+      :next(function(c)
+        resolved = c
+      end)
+    t:feed("gg<CR>") -- select the first option
+    t:wait_for(function()
+      return resolved
+    end, { tries = 100, interval = 20, message = "pickString did not resolve" })
+    nx.test.expect(resolved.mode).to_be("debug")
+  end)
+
+  nx.test.it("resolves a type='command' input through the registry", function(t)
+    open(t)
+    local resolved
+    variables
+      .resolve_dynamic({
+        program = "${input:prog}",
+        inputs = { { id = "prog", type = "command", command = "locate", args = { "x" } } },
+      }, {
+        commands = {
+          locate = function(args)
+            return "/found/" .. tostring(args and args[1])
+          end,
+        },
+      })
+      :next(function(c)
+        resolved = c
+      end)
+    t:wait_for(function()
+      return resolved
+    end, { tries = 100, interval = 20, message = "command-input did not resolve" })
+    nx.test.expect(resolved.program).to_be("/found/x")
+  end)
+
+  nx.test.it("prompts only once for an input referenced twice", function(t)
+    open(t)
+    local resolved
+    variables
+      .resolve_dynamic({
+        program = "${input:p}",
+        args = { "${input:p}" },
+        inputs = { { id = "p", type = "promptString" } },
+      }, {})
+      :next(function(c)
+        resolved = c
+      end)
+    t:feed("X<CR>") -- a single answer feeds both references
+    t:wait_for(function()
+      return resolved
+    end, { tries = 100, interval = 20, message = "cached input did not resolve" })
+    nx.test.expect(resolved.program).to_be("X")
+    nx.test.expect(resolved.args[1]).to_be("X")
+  end)
+
+  nx.test.it("rejects a missing ${input:id} definition", function(t)
+    open(t)
+    local err
+    variables.resolve_dynamic({ program = "${input:missing}" }, {}):next(nil, function(e)
+      err = e
+    end)
+    t:wait_for(function()
+      return err
+    end, { tries = 100, interval = 20, message = "missing input did not reject" })
+    nx.test.expect(tostring(err):find("missing", 1, true)).never.to_be_nil()
+  end)
+
+  nx.test.it("rejects a missing ${command:id}", function(t)
+    open(t)
+    local err
+    variables
+      .resolve_dynamic({ program = "${command:nope}" }, { commands = {} })
+      :next(nil, function(e)
+        err = e
+      end)
+    t:wait_for(function()
+      return err
+    end, { tries = 100, interval = 20, message = "missing command did not reject" })
+    nx.test.expect(tostring(err):find("nope", 1, true)).never.to_be_nil()
+  end)
 end)
