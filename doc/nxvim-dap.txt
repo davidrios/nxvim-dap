@@ -41,6 +41,28 @@ ADAPTERS                                                  *nxvim-dap-adapters*
 `dap.configurations[filetype]` is a list of `{ type, request = "launch"|
 "attach", name, ... }` specs; `type` names the adapter.
 
+VARIABLE EXPANSION                                      *nxvim-dap-variables*
+
+Configuration string values are expanded against the current context when a
+session starts (recursing into nested tables / `args` lists):
+
+  ${file}                     current buffer's absolute path
+  ${fileBasename}             its filename (with extension)
+  ${fileBasenameNoExtension}  its filename without the extension
+  ${fileDirname}              its directory
+  ${fileExtname}              its extension (no dot)
+  ${relativeFile}             the file relative to the working directory
+  ${relativeFileDirname}      the directory of ${relativeFile}
+  ${workspaceFolder}          the working directory (getcwd)
+  ${workspaceFolderBasename}  its basename
+  ${cwd}                      the working directory
+  ${env:NAME}                 the NAME environment variable ("" when unset)
+
+An unrecognised `${...}` is left as-is and warned about (the VSCode
+`${input:…}` / `${command:…}` prompts are not supported). A value may also be a
+function returning a string — called synchronously at launch and its result
+expanded in turn — for a dynamically computed path.
+
 ==============================================================================
 COMMANDS                                                 *nxvim-dap-commands*
 

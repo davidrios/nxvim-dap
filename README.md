@@ -164,6 +164,36 @@ dap.configurations.c = {
 When you `:DapContinue` with no running session, nxvim-dap picks a configuration for the
 current buffer's filetype (prompting if there's more than one).
 
+### Variable expansion
+
+Configuration string values are expanded against the current editor context the moment a
+session starts, so the nvim-dap idiom works as written:
+
+| Variable | Expands to |
+| --- | --- |
+| `${file}` | the current buffer's absolute path |
+| `${fileBasename}` / `${fileBasenameNoExtension}` | its filename, with / without extension |
+| `${fileDirname}` / `${fileExtname}` | its directory / extension |
+| `${relativeFile}` / `${relativeFileDirname}` | the file (or its dir) relative to the cwd |
+| `${workspaceFolder}` / `${workspaceFolderBasename}` / `${cwd}` | the working directory / its basename |
+| `${env:NAME}` | the `NAME` environment variable (`""` when unset) |
+
+Expansion recurses into nested tables and `args` lists. An unrecognised `${...}` is left
+as-is and a warning is shown (the VSCode `${input:…}` / `${command:…}` prompts aren't
+supported). A value may also be a **function returning a string** — called synchronously
+at launch, its result expanded in turn — for a path computed dynamically:
+
+```lua
+dap.configurations.python = {
+  { type = "python", request = "launch", name = "Launch file", program = "${file}" },
+  { type = "python", request = "launch", name = "Built binary",
+    program = function() return vim.fn.getcwd() .. "/build/app" end },
+}
+```
+
+(The function runs in the editor tick, so it must be synchronous — return a string, don't
+block or await.)
+
 ### Commands
 
 | Command                    | Action                                    |

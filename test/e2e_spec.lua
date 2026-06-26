@@ -121,6 +121,30 @@ nx.test.describe("nxvim-dap end-to-end (real adapter over nx.process)", function
     end, { tries = 300, interval = 20, message = "session did not terminate" })
   end)
 
+  nx.test.it("expands ${file} in the launch configuration before launch", function(t)
+    local dir = nx.test.tempdir()
+    local prog = dir .. "/expand_me.py"
+    nx.await(nx.fs.write(prog, "x = 1\n"))
+    t:cmd("edit " .. prog)
+
+    dap.setup({})
+    dap.adapters.mock = { command = "python3", args = { MOCK } }
+    -- Launch with program = "${file}" — it must reach the adapter as the resolved path.
+    dap.run({ type = "mock", request = "launch", name = "expand", program = "${file}" })
+    wait_stopped(t, 2)
+
+    local abs = dap.signs.abspath(prog)
+    -- The session stored the EXPANDED config (no literal ${file} left).
+    nx.test.expect(dap.session().config.program).to_be(abs)
+    -- And the adapter received it: the mock echoes `program` as the frame's source path.
+    nx.test.expect(dap.session().current_frame.source.path).to_be(abs)
+
+    dap.terminate()
+    t:wait_for(function()
+      return dap.session() == nil
+    end, { tries = 300, interval = 20, message = "session did not terminate" })
+  end)
+
   nx.test.it("sets a variable's value over the live adapter (setVariable)", function(t)
     local dir = nx.test.tempdir()
     local prog = dir .. "/v.py"

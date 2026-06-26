@@ -12,6 +12,7 @@
 --
 -- Module map:
 --   config.lua       defaults + adapter/configuration validation
+--   variables.lua    ${file}/${workspaceFolder}/… + callable expansion of a config
 --   rpc.lua          the Content-Length wire codec
 --   session.lua      the DAP protocol state machine over an injected transport
 --   breakpoints.lua  the breakpoint store + cursor toggle
@@ -30,6 +31,7 @@
 --   -- then <F5> / :DapContinue starts it, <leader>db toggles a breakpoint.
 
 local config_mod = require("nxvim-dap.config")
+local variables = require("nxvim-dap.variables")
 local session_mod = require("nxvim-dap.session")
 local breakpoints = require("nxvim-dap.breakpoints")
 local signs = require("nxvim-dap.signs")
@@ -189,6 +191,24 @@ end
 -- NEW concurrent session, made active. Prior sessions keep running.
 function M.run(config)
   config = config_mod.validate_configuration(config)
+  -- Resolve `${file}` / `${workspaceFolder}` / … and any callable field values against
+  -- the current context before the config reaches the adapter (see variables.lua). A
+  -- failing dynamic-value function aborts the launch loud; an unrecognised `${...}` is
+  -- left as-is and warned about.
+  local ok, expanded, unknown = pcall(variables.expand, config)
+  if not ok then
+    nx.notify(tostring(expanded), 4)
+    return
+  end
+  config = expanded
+  if #unknown > 0 then
+    nx.notify(
+      "nxvim-dap: unrecognised config variable(s) left as-is: ${"
+        .. table.concat(unknown, "}, ${")
+        .. "}",
+      3
+    )
+  end
   local adapter = M.adapters[config.type]
   if not adapter then
     nx.notify(("nxvim-dap: no adapter registered for type %q"):format(config.type), 4)
@@ -665,5 +685,6 @@ M.breakpoints = breakpoints
 M.signs = signs
 M.ui = ui
 M.repl = repl
+M.variables = variables
 
 return M
