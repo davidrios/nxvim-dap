@@ -160,16 +160,60 @@ function M.eval(expr)
   end)
 end
 
+-- Map the adapter's DAP `CompletionItem`s to the `nx.ui.input` wildmenu shape
+-- (`{ label, insert, doc }`). `text` defaults to `label` (DAP spec), `detail` (when
+-- the adapter sends one) becomes the side-docs body, headed by the item's `type`
+-- (`function`, `variable`, …) so the pane reads like a tiny signature card.
+local function completion_items(targets)
+  local out = {}
+  for _, t in ipairs(targets) do
+    local label = t.label or t.text or ""
+    local doc = t.detail
+    if t.type and t.type ~= "" then
+      doc = doc and (t.type .. "\n\n" .. doc) or t.type
+    end
+    out[#out + 1] = { label = label, insert = t.text or label, doc = doc }
+  end
+  return out
+end
+
+-- The REPL's autocomplete source: ask the active adapter for completions at the
+-- cursor (DAP columns are 1-based, so the 0-based `col` core hands us is `col + 1`),
+-- in the current stopped frame. Returns a PROMISE — the request is a wire round-trip
+-- — that resolves to the wildmenu candidates (empty when there's no session or the
+-- adapter has no `completions` support, which simply opens no menu).
+local function repl_complete(line, col)
+  return nx.promise.new(function(resolve)
+    if not session then
+      return resolve({})
+    end
+    local frame_id = session.current_frame and session.current_frame.id
+    session:completions(line, col + 1, frame_id, function(err, targets)
+      if err or not targets then
+        return resolve({})
+      end
+      resolve(completion_items(targets))
+    end)
+  end)
+end
+
 -- Open an input prompt for the next REPL expression. `history` gives the prompt
 -- readline-style recall (`<Up>`/`<Down>`) over the expressions evaluated this
 -- session, scoped to its own namespace so it's independent of the `:` / search
--- histories and of any other plugin's input history.
+-- histories and of any other plugin's input history. `complete` wires `<Tab>`
+-- autocomplete (with a side-docs pane) to the adapter's `completions` request.
 function M.prompt()
-  nx.ui.input({ prompt = "dap> ", history = "nxvim-dap-repl" }):next(function(expr)
-    if expr then
-      M.eval(expr)
-    end
-  end)
+  nx.ui
+    .input({
+      prompt = "dap> ",
+      history = "nxvim-dap-repl",
+      complete = repl_complete,
+    })
+    :next(function(expr)
+      if expr then
+        M.eval(expr)
+      end
+    end)
 end
 
 function M.clear()

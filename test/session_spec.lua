@@ -330,3 +330,44 @@ nx.test.describe("nxvim-dap.session exception breakpoints", function()
     nx.test.expect(se.arguments.filters[1]).to_be("raised")
   end)
 end)
+
+nx.test.describe("nxvim-dap.session completions", function()
+  nx.test.it("issues a completions request with text/column/frameId", function()
+    local hx = harness()
+    hx.session.capabilities = { supportsCompletionsRequest = true }
+    hx.session:completions("os.get", 7, 11, function() end)
+    local req = hx.last("completions")
+    nx.test.expect(req).never.to_be_nil()
+    nx.test.expect(req.arguments.text).to_be("os.get")
+    nx.test.expect(req.arguments.column).to_be(7)
+    nx.test.expect(req.arguments.frameId).to_be(11)
+  end)
+
+  nx.test.it("delivers the adapter's targets to the callback", function()
+    local hx = harness()
+    hx.session.capabilities = { supportsCompletionsRequest = true }
+    local got
+    hx.session:completions("os.", 4, nil, function(_, targets)
+      got = targets
+    end)
+    hx.respond("completions", {
+      targets = { { label = "getcwd", text = "getcwd", type = "function" } },
+    })
+    nx.test.expect(got).never.to_be_nil()
+    nx.test.expect(#got).to_be(1)
+    nx.test.expect(got[1].label).to_be("getcwd")
+  end)
+
+  nx.test.it("reports no completions (not an error) when unsupported", function()
+    local hx = harness()
+    hx.session.capabilities = {} -- no supportsCompletionsRequest
+    local err, targets = "unset", "unset"
+    hx.session:completions("x", 2, nil, function(e, t)
+      err, targets = e, t
+    end)
+    -- Resolves immediately with an empty list and no error — no request is sent.
+    nx.test.expect(err).to_be_nil()
+    nx.test.expect(#targets).to_be(0)
+    nx.test.expect(hx.last("completions")).to_be_nil()
+  end)
+end)

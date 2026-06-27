@@ -416,6 +416,29 @@ function Session:evaluate(expr, frame_id, context, cb)
   }, cb)
 end
 
+-- Ask the adapter for completion proposals at `column` (1-based) within `text` (the
+-- expression typed so far), in the context of `frame_id`. Needs the adapter's
+-- `supportsCompletionsRequest`; without it `cb(nil, {})` reports "no completions"
+-- rather than erroring (an absent capability is a normal, quiet outcome, not a bug).
+-- `cb(err, targets)` where `targets` is the list of DAP `CompletionItem`s.
+function Session:completions(text, column, frame_id, cb)
+  if not self.capabilities.supportsCompletionsRequest then
+    cb(nil, {})
+    return
+  end
+  self:request("completions", {
+    text = text,
+    column = column,
+    frameId = frame_id,
+  }, function(err, body)
+    if err then
+      cb(err)
+    else
+      cb(nil, (body and body.targets) or {})
+    end
+  end)
+end
+
 -- Set the value of a variable in a container (`ref` is the parent's
 -- `variablesReference`). Needs the adapter's `supportsSetVariable`. `cb(err, body)`
 -- where body carries the updated `value` / `variablesReference`.
