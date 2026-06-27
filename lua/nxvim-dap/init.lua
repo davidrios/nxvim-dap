@@ -314,7 +314,25 @@ end
 
 -- Start debugging, or resume if a session is already stopped. With no running
 -- session, pick a configuration for the current buffer's filetype.
-function M.continue()
+-- The names of the launch configurations available for the current buffer's filetype —
+-- the candidate set `:DapContinue <Tab>` completes against.
+function M._configuration_names()
+  local ft = vim.bo[nx.buf.current()].filetype
+  local names = {}
+  for _, c in ipairs(M.configurations[ft] or {}) do
+    if c.name and c.name ~= "" then
+      names[#names + 1] = c.name
+    end
+  end
+  return names
+end
+
+-- Start (or resume) debugging. With an explicit `name` (the optional `:DapContinue`
+-- argument, completed from `_configuration_names`), launch that named configuration for
+-- the current filetype directly instead of prompting; an unknown name is reported rather
+-- than silently ignored. Without one, resume a live session or pick a configuration as
+-- before.
+function M.continue(name)
   if M._session and not M._session.terminated then
     M._session:continue()
     return
@@ -323,6 +341,16 @@ function M.continue()
   local cfgs = M.configurations[ft]
   if not cfgs or #cfgs == 0 then
     nx.notify(("nxvim-dap: no debug configuration for filetype %q"):format(tostring(ft)), 3)
+    return
+  end
+  if name and name ~= "" then
+    for _, c in ipairs(cfgs) do
+      if c.name == name then
+        M.run(c)
+        return
+      end
+    end
+    nx.notify(("nxvim-dap: no configuration %q for filetype %q"):format(name, tostring(ft)), 3)
     return
   end
   if #cfgs == 1 then
@@ -624,16 +652,44 @@ function M._breakpoint_items()
   return items
 end
 
+-- The dynamic location list backing `:DapBreakpoints`: a named list bound to
+-- `M._breakpoint_items`, so a single `nx.qf.refresh` rewrites it in place whenever the
+-- breakpoint set changes — an open window repaints live instead of showing a stale
+-- snapshot. Registered lazily on the first `:DapBreakpoints`; `_refresh_breakpoint_list`
+-- is then a no-op until that point.
+local BP_LIST = "nxvim-dap-breakpoints"
+local bp_list_registered = false
+
+-- Re-run the breakpoint location list's source and repaint it (a no-op when no window
+-- shows it). Called after every breakpoint mutation so an open list stays current.
+function M._refresh_breakpoint_list()
+  if bp_list_registered then
+    nx.qf.refresh(BP_LIST)
+  end
+end
+
 -- List every breakpoint in a location list (so selecting one jumps to that file/line).
--- Honors 'qfdock' like every other nxvim location list. A no-op (with a notice) when no
--- breakpoint is set, so the user isn't dropped into an empty list.
+-- It's a *dynamic* list: it stays bound to its source, so adding/removing a breakpoint
+-- while it's open updates it live. Honors 'qfdock' like every other nxvim location list.
+-- A no-op (with a notice) when no breakpoint is set, so the user isn't dropped into an
+-- empty window.
 function M.list_breakpoints()
-  local items = M._breakpoint_items()
-  if #items == 0 then
+  if #M._breakpoint_items() == 0 then
     nx.notify("nxvim-dap: no breakpoints set", 2)
     return
   end
-  nx.qf.send_to_loclist(items, { title = "Breakpoints" })
+  -- Bind the list to the window it opens in (redefining keeps that binding), so live
+  -- refreshes land where it shows.
+  nx.qf.dynamic({
+    name = BP_LIST,
+    loclist = true,
+    title = "Breakpoints",
+    source = M._breakpoint_items,
+  })
+  bp_list_registered = true
+  nx.qf.refresh(BP_LIST):next(function()
+    nx.qf.lopen()
+  end)
 end
 
 -- ----- UI surfaces -----------------------------------------------------------
@@ -656,7 +712,6 @@ end
 -- ----- setup -----------------------------------------------------------------
 
 local COMMANDS = {
-  { "DapContinue", "continue", "Start or resume debugging" },
   { "DapStepOver", "step_over", "Step over" },
   { "DapStepInto", "step_into", "Step into" },
   { "DapStepOut", "step_out", "Step out" },
@@ -719,22 +774,22 @@ function M.setup(opts)
     end
   end
 
-  -- Persist breakpoints across sessions, but only inside a `--workspace` launch:
-  -- breakpoints are project state, and the shared global store would mix every
-  -- project's together (and never know which to restore). The plugin shada is loaded
-  -- before init.lua runs, so the saved set is already in hand here — restore it once
-  -- (a re-run of setup() must not wipe live breakpoints), then save on every change.
-  if nx.workspace.active() then
-    local store = nx.shada.plugin()
-    if not bp_restored then
-      breakpoints.restore(store:get("breakpoints"))
-      bp_restored = true
-    end
-    breakpoints.on_persist = function()
+  -- React to a settled breakpoint change: persist it (workspace only) and repaint an
+  -- open breakpoints list. Persistence is gated to a `--workspace` launch — breakpoints
+  -- are project state, and the shared global store would mix every project's together
+  -- (and never know which to restore). The plugin shada is loaded before init.lua runs,
+  -- so the saved set is already in hand here — restore it once (a re-run of setup() must
+  -- not wipe live breakpoints). The list refresh runs regardless of workspace.
+  local store = nx.workspace.active() and nx.shada.plugin() or nil
+  if store and not bp_restored then
+    breakpoints.restore(store:get("breakpoints"))
+    bp_restored = true
+  end
+  breakpoints.on_commit = function()
+    if store then
       store:set("breakpoints", breakpoints.list())
     end
-  else
-    breakpoints.on_persist = nil
+    M._refresh_breakpoint_list()
   end
 
   -- Wire the sidebar's callbacks into the cross-session state init.lua owns: source
@@ -753,6 +808,16 @@ function M.setup(opts)
       M[fn_name]()
     end, { desc = desc })
   end
+  -- `:DapContinue [config]` — the launch command takes an optional configuration name,
+  -- completed from the current filetype's configurations, so `<Tab>` lists them.
+  nx.command("DapContinue", function(ev)
+    M.continue(ev and ev.args)
+  end, {
+    desc = "Start or resume debugging (optionally a named configuration)",
+    complete = function()
+      return M._configuration_names()
+    end,
+  })
   nx.command("DapEval", function(ev)
     M.eval(ev and ev.args)
   end, { desc = "Evaluate an expression in the stopped frame" })

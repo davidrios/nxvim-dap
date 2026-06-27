@@ -152,10 +152,10 @@ nx.test.describe("nxvim-dap breakpoints", function()
     nx.test.expect(n).to_be(0)
   end)
 
-  nx.test.it("fires on_persist after each breakpoint mutation", function(t)
+  nx.test.it("fires on_commit after each breakpoint mutation", function(t)
     open_temp(t)
     local saved = 0
-    breakpoints.on_persist = function()
+    breakpoints.on_commit = function()
       saved = saved + 1
     end
     t:feed("2G")
@@ -167,7 +167,7 @@ nx.test.describe("nxvim-dap breakpoints", function()
     nx.test.expect(saved).to_be(3)
     breakpoints.clear_all() -- clear
     nx.test.expect(saved).to_be(4)
-    breakpoints.on_persist = nil
+    breakpoints.on_commit = nil
   end)
 
   nx.test.it("lists every breakpoint as location-list entries", function(t)
@@ -188,6 +188,31 @@ nx.test.describe("nxvim-dap breakpoints", function()
     nx.test.expect(items[2].text).to_be("cond: i == 2")
   end)
 
+  nx.test.it("opens a breakpoints location list that refreshes on change", function(t)
+    local f = open_temp(t)
+    local mainwin = nx.win.current()
+    t:feed("2G")
+    breakpoints.toggle()
+
+    -- Open the list: it binds to this window and shows the one breakpoint.
+    dap.list_breakpoints()
+    t:sleep(80)
+    nx.test.expect(#nx.qf.getloclist(mainwin)).to_be(1)
+
+    -- Back in the source buffer, add another breakpoint. The list is *dynamic*, so its
+    -- refresh-on-commit rewrites it in place — without re-running `:DapBreakpoints`.
+    t:cmd("lclose")
+    t:feed("4G")
+    breakpoints.toggle()
+    t:sleep(80)
+    nx.test.expect(#nx.qf.getloclist(mainwin)).to_be(2)
+
+    -- Clearing every breakpoint refreshes the list down to empty too.
+    breakpoints.clear_all()
+    t:sleep(80)
+    nx.test.expect(#nx.qf.getloclist(mainwin)).to_be(0)
+  end)
+
   nx.test.it("round-trips breakpoints through the plugin shada store", function(t)
     -- Exercise the real persistence path the workspace wiring uses: the same
     -- `nx.shada.plugin()` handle (the nxvim-dap namespace; in-memory here since the test
@@ -198,7 +223,7 @@ nx.test.describe("nxvim-dap breakpoints", function()
     -- (the dev escape hatch); the real plugin's setup() calls `nx.shada.plugin()` with no
     -- argument and is assigned the `nxvim-dap` namespace from its install location.
     local store = nx.shada.plugin("nxvim-dap")
-    breakpoints.on_persist = function()
+    breakpoints.on_commit = function()
       store:set("breakpoints", breakpoints.list())
     end
 
@@ -209,7 +234,7 @@ nx.test.describe("nxvim-dap breakpoints", function()
 
     -- "Restart": the old session's hook is gone and the live store is empty, just as it
     -- would be at boot, before setup() reloads from the shada.
-    breakpoints.on_persist = nil
+    breakpoints.on_commit = nil
     breakpoints.restore({})
     nx.test.expect(next(breakpoints.list())).to_be_nil()
 
@@ -219,5 +244,65 @@ nx.test.describe("nxvim-dap breakpoints", function()
     nx.test.expect(bps[1].line).to_be(2)
     nx.test.expect(bps[1].condition).to_be("n == 5")
     nx.test.expect(bps[2].line).to_be(4)
+  end)
+end)
+
+nx.test.describe("nxvim-dap launch completion", function()
+  nx.test.before_each(function()
+    dap.setup({
+      configurations = {
+        cttest = {
+          { type = "x", request = "launch", name = "Run file" },
+          { type = "x", request = "launch", name = "Attach" },
+        },
+      },
+    })
+    dap._session = nil -- no live session, so continue() launches rather than resumes
+  end)
+
+  -- Open a buffer whose filetype has the configurations seeded above.
+  local function open_cttest(t)
+    local f = nx.test.tempdir() .. "/s.txt"
+    nx.await(nx.fs.write(f, "x\n"))
+    t:cmd("edit " .. f)
+    t:cmd("set filetype=cttest")
+    return f
+  end
+
+  nx.test.it("completes configuration names for the current filetype", function(t)
+    open_cttest(t)
+    -- The completer the `:DapContinue` command declares: every configuration name for
+    -- this filetype (core fuzzy-ranks them against the partial argument).
+    local names = dap._configuration_names()
+    table.sort(names)
+    nx.test.expect(table.concat(names, ",")).to_be("Attach,Run file")
+  end)
+
+  nx.test.it("offers no completions for a filetype with no configurations", function(t)
+    local f = nx.test.tempdir() .. "/p.txt"
+    nx.await(nx.fs.write(f, "x\n"))
+    t:cmd("edit " .. f)
+    t:cmd("set filetype=noconfigs")
+    nx.test.expect(#dap._configuration_names()).to_be(0)
+  end)
+
+  nx.test.it("launches a named configuration directly", function(t)
+    open_cttest(t)
+    local ran
+    local orig = dap.run
+    dap.run = function(cfg)
+      ran = cfg
+    end
+
+    dap.continue("Attach") -- the `:DapContinue Attach` argument path
+    nx.test.expect(ran).never.to_be_nil()
+    nx.test.expect(ran.name).to_be("Attach")
+
+    -- An unknown name launches nothing (reported, not silently the first config).
+    ran = nil
+    dap.continue("nope")
+    nx.test.expect(ran).to_be_nil()
+
+    dap.run = orig
   end)
 end)

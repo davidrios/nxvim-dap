@@ -44,9 +44,10 @@ then connects to `host:port`, retrying while it comes up. So both adapter kinds 
 - **Breakpoints** — toggle (`<leader>db`), conditional (`<leader>dB`), and log points,
   plus a full **edit** flow (`<leader>de`) for the condition / hit count / log message,
   shown as gutter signs in the source buffer and synced live to a running session.
-  `:DapBreakpoints` lists them all in a location list (select an entry to jump to it). In
-  a `--workspace` session they're saved to the workspace's plugin shada and restored next
-  time the project is opened.
+  `:DapBreakpoints` lists them all in a **live** location list (select an entry to jump to
+  it; it refreshes in place as you add or remove breakpoints). In a `--workspace` session
+  they're saved to the workspace's plugin shada and restored next time the project is
+  opened.
 - **Exception breakpoints** — pick the adapter's exception filters (e.g. *raised* /
   *uncaught*) from a checkbox section in the sidebar; the choice is seeded at launch,
   pushed live, and persists across restarts.
@@ -227,7 +228,7 @@ dap.configurations.python = {
 
 | Command                    | Action                                    |
 | -------------------------- | ----------------------------------------- |
-| `:DapContinue`             | start debugging / resume                  |
+| `:DapContinue [config]`    | start debugging / resume (`<Tab>` completes a config name) |
 | `:DapStepOver`             | step over                                 |
 | `:DapStepInto`             | step into                                 |
 | `:DapStepOut`              | step out                                  |

@@ -15,10 +15,10 @@ M.store = {}
 -- breakpoints to an active session. Set by init.lua; a no-op until then.
 M.on_change = nil
 
--- on_persist(): called after any mutation (with the store already updated) so init.lua
--- can save the whole set to the workspace plugin shada. Set by init.lua only in a
--- `--workspace` session; a no-op otherwise.
-M.on_persist = nil
+-- on_commit(): called once per logical mutation (with the store already updated) so
+-- init.lua can react to a settled change — save the set to the workspace plugin shada
+-- and refresh the breakpoints location list. Set by init.lua; a no-op until then.
+M.on_commit = nil
 
 local function fire(path)
   if M.on_change then
@@ -26,11 +26,11 @@ local function fire(path)
   end
 end
 
--- Tell init.lua to re-persist the store. Called once per logical mutation, after the
--- store and signs are settled.
-local function persist()
-  if M.on_persist then
-    M.on_persist()
+-- Signal a settled mutation. Called once per logical change, after the store and signs
+-- are settled (unlike `fire`, which is per-affected-file for the live-session push).
+local function commit()
+  if M.on_commit then
+    M.on_commit()
   end
 end
 
@@ -94,7 +94,7 @@ function M.toggle(opts)
     signs.render_breakpoints(path, bps)
   end
   fire(path)
-  persist()
+  commit()
 end
 
 -- The breakpoint at the cursor (its `{ line, condition?, hitCondition?, logMessage? }`),
@@ -141,7 +141,7 @@ function M.set_at_cursor(fields)
   bp.logMessage = fields.logMessage
   signs.render_breakpoints(path, bps)
   fire(path)
-  persist()
+  commit()
 end
 
 -- Remove every breakpoint (and its signs), firing a change per affected file so a
@@ -156,7 +156,7 @@ function M.clear_all()
     signs.clear_breakpoints(path)
     fire(path)
   end
-  persist()
+  commit()
 end
 
 -- The whole store (the session's `get_breakpoints`).
@@ -169,7 +169,7 @@ end
 -- Used at setup to seed the breakpoints persisted in the workspace shada. Tolerant of a
 -- malformed blob (anything not a table is treated as "nothing saved"), and skips entries
 -- without a numeric `line` so a corrupt store can't break startup. Does NOT fire
--- `on_persist` — restoring isn't a user mutation, and re-saving here would be a no-op.
+-- `on_commit` — restoring isn't a user mutation, and re-saving here would be a no-op.
 function M.restore(data)
   if type(data) ~= "table" then
     return
