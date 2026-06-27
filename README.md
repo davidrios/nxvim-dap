@@ -58,7 +58,9 @@ then connects to `host:port`, retrying while it comes up. So both adapter kinds 
 - **Multiple concurrent sessions** — run several debuggees at once; the panels follow
   the session that stops, and `:DapSessions` switches the active one.
 - **REPL / console** — the adapter's `output` events plus an `evaluate` prompt that runs
-  expressions in the stopped frame.
+  expressions in the stopped frame, with readline-style history (`<Up>`/`<Down>` recall
+  the session's past expressions) and `<Tab>` autocomplete (the adapter's `completions`
+  request, shown in an inline wildmenu with a side-docs pane).
 - **nvim-dap parity** — the same `adapters` / `configurations` two-table model, so a
   ported debug setup reads almost identically.
 - **Extensible** — overridable highlights, rebindable keys, a public API, and the
