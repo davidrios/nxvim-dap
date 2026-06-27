@@ -51,4 +51,41 @@ nx.test.describe("nxvim-dap repl", function()
     t:sleep(40)
     nx.test.expect(nx.win.current()).to_be(before)
   end)
+
+  nx.test.it("completes a REPL expression from the adapter, honoring start/length", function(t)
+    -- A fake session whose `completions` returns a target with an explicit replace
+    -- range (DAP start is 1-based — columnsStartAt1 — so start=1 means offset 0; length
+    -- 6 covers "os.get"). `evaluate` just echoes so the eval can complete.
+    local fake = {
+      current_frame = { id = 1 },
+      completions = function(_, _text, _col, _frame, cb)
+        cb(nil, { { label = "os.getcwd", text = "os.getcwd", start = 1, length = 6 } })
+      end,
+      evaluate = function(_, _expr, _frame, _ctx, cb)
+        cb(nil, { result = "<cwd>" })
+      end,
+    }
+    repl.open()
+    repl.set_session(fake)
+
+    -- Open the dap> prompt, type a partial member access, complete it (<Tab> opens the
+    -- wildmenu, <Tab> selects the row), and submit — the explicit range replaces the
+    -- whole "os.get" span, not just the "get" token, so the echoed expression is whole.
+    t:feed("<CR>")
+    t:feed("os.get")
+    t:feed("<Tab>")
+    t:feed("<Tab>")
+    t:feed("<CR>")
+    t:sleep(80)
+
+    local buf = repl.bufnr()
+    local lines = buf and nx.buf.lines(buf, 0, -1, false) or {}
+    local echoed = false
+    for _, l in ipairs(lines) do
+      if l == "> os.getcwd" then
+        echoed = true
+      end
+    end
+    nx.test.expect(echoed).to_be_truthy()
+  end)
 end)

@@ -161,9 +161,13 @@ function M.eval(expr)
 end
 
 -- Map the adapter's DAP `CompletionItem`s to the `nx.ui.input` wildmenu shape
--- (`{ label, insert, doc }`). `text` defaults to `label` (DAP spec), `detail` (when
--- the adapter sends one) becomes the side-docs body, headed by the item's `type`
--- (`function`, `variable`, …) so the pane reads like a tiny signature card.
+-- (`{ label, insert, doc, start?, length? }`). `text` defaults to `label` (DAP spec),
+-- `detail` (when the adapter sends one) becomes the side-docs body, headed by the
+-- item's `type` (`function`, `variable`, …) so the pane reads like a tiny signature
+-- card. When the adapter specifies an explicit replace range (`start`/`length`), it is
+-- forwarded so the completion overwrites exactly that span rather than the editor's
+-- trailing-identifier token — `start` is 1-based (we send `columnsStartAt1 = true` in
+-- the initialize handshake), so it is converted to the 0-based char offset core wants.
 local function completion_items(targets)
   local out = {}
   for _, t in ipairs(targets) do
@@ -172,7 +176,12 @@ local function completion_items(targets)
     if t.type and t.type ~= "" then
       doc = doc and (t.type .. "\n\n" .. doc) or t.type
     end
-    out[#out + 1] = { label = label, insert = t.text or label, doc = doc }
+    local item = { label = label, insert = t.text or label, doc = doc }
+    if t.start ~= nil and t.length ~= nil then
+      item.start = t.start - 1
+      item.length = t.length
+    end
+    out[#out + 1] = item
   end
   return out
 end
