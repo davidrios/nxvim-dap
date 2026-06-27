@@ -166,8 +166,15 @@ end
 -- item's `type` (`function`, `variable`, …) so the pane reads like a tiny signature
 -- card. When the adapter specifies an explicit replace range (`start`/`length`), it is
 -- forwarded so the completion overwrites exactly that span rather than the editor's
--- trailing-identifier token — `start` is 1-based (we send `columnsStartAt1 = true` in
--- the initialize handshake), so it is converted to the 0-based char offset core wants.
+-- trailing-identifier token.
+--
+-- `start` is the 0-based char offset core wants, used as-is. The DAP spec says
+-- `CompletionItem.start` honors the client's `columnsStartAt1` (we send `true`), which
+-- would make it 1-based — but debugpy (the common Python adapter) ignores that for the
+-- completions response and always emits a 0-based `start` (it computes `column - len(qualifier)`
+-- on its own 0-based column and never converts back). Subtracting 1 here shifted every
+-- replace span one char left, eating the character before the completed token (the `.`
+-- in `os.get`, or mis-anchoring `abs(`). So we pass `start` through unchanged.
 local function completion_items(targets)
   local out = {}
   for _, t in ipairs(targets) do
@@ -178,7 +185,7 @@ local function completion_items(targets)
     end
     local item = { label = label, insert = t.text or label, doc = doc }
     if t.start ~= nil and t.length ~= nil then
-      item.start = t.start - 1
+      item.start = t.start
       item.length = t.length
     end
     out[#out + 1] = item
