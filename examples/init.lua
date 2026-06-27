@@ -56,7 +56,7 @@ nx.plugins({
       }
 
       -- One launch configuration for Python files, pointed at the sample program.
-      dap.configurations.python = {
+      dap.configurations.python_mock = {
         {
           type = "mock",
           request = "launch",
@@ -65,16 +65,16 @@ nx.plugins({
         },
       }
 
-      -- ---- A real adapter, for reference (uncomment + `pip install debugpy`) ----
-      -- dap.adapters.python = {
-      --   type = "executable",
-      --   command = "python3",
-      --   args = { "-m", "debugpy.adapter" },
-      -- }
-      -- dap.configurations.python = {
-      --   { type = "python", request = "launch", name = "launch file",
-      --     program = "${file}", console = "integratedTerminal" },
-      -- }
+      -- A real adapter, for reference (uncomment + `pip install debugpy`) ----
+      dap.adapters.python = {
+        type = "executable",
+        command = "python3",
+        args = { "-m", "debugpy.adapter" },
+      }
+      dap.configurations.python = {
+        { type = "python", request = "launch", name = "launch file",
+          program = "${file}", console = "integratedTerminal" },
+      }
     end,
   },
 })
