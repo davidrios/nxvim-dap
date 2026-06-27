@@ -160,9 +160,12 @@ function M.eval(expr)
   end)
 end
 
--- Open an input prompt for the next REPL expression.
+-- Open an input prompt for the next REPL expression. `history` gives the prompt
+-- readline-style recall (`<Up>`/`<Down>`) over the expressions evaluated this
+-- session, scoped to its own namespace so it's independent of the `:` / search
+-- histories and of any other plugin's input history.
 function M.prompt()
-  nx.ui.input({ prompt = "dap> " }):next(function(expr)
+  nx.ui.input({ prompt = "dap> ", history = "nxvim-dap-repl" }):next(function(expr)
     if expr then
       M.eval(expr)
     end
