@@ -15,9 +15,22 @@ M.store = {}
 -- breakpoints to an active session. Set by init.lua; a no-op until then.
 M.on_change = nil
 
+-- on_persist(): called after any mutation (with the store already updated) so init.lua
+-- can save the whole set to the workspace plugin shada. Set by init.lua only in a
+-- `--workspace` session; a no-op otherwise.
+M.on_persist = nil
+
 local function fire(path)
   if M.on_change then
     M.on_change(path, M.store[path] or {})
+  end
+end
+
+-- Tell init.lua to re-persist the store. Called once per logical mutation, after the
+-- store and signs are settled.
+local function persist()
+  if M.on_persist then
+    M.on_persist()
   end
 end
 
@@ -81,6 +94,7 @@ function M.toggle(opts)
     signs.render_breakpoints(path, bps)
   end
   fire(path)
+  persist()
 end
 
 -- The breakpoint at the cursor (its `{ line, condition?, hitCondition?, logMessage? }`),
@@ -127,6 +141,7 @@ function M.set_at_cursor(fields)
   bp.logMessage = fields.logMessage
   signs.render_breakpoints(path, bps)
   fire(path)
+  persist()
 end
 
 -- Remove every breakpoint (and its signs), firing a change per affected file so a
@@ -141,11 +156,47 @@ function M.clear_all()
     signs.clear_breakpoints(path)
     fire(path)
   end
+  persist()
 end
 
 -- The whole store (the session's `get_breakpoints`).
 function M.list()
   return M.store
+end
+
+-- Replace the store with `data` (the shape `M.list` returns: `abspath -> list of
+-- { line, condition?, hitCondition?, logMessage? }`) and repaint every file's signs.
+-- Used at setup to seed the breakpoints persisted in the workspace shada. Tolerant of a
+-- malformed blob (anything not a table is treated as "nothing saved"), and skips entries
+-- without a numeric `line` so a corrupt store can't break startup. Does NOT fire
+-- `on_persist` — restoring isn't a user mutation, and re-saving here would be a no-op.
+function M.restore(data)
+  if type(data) ~= "table" then
+    return
+  end
+  M.store = {}
+  for path, bps in pairs(data) do
+    if type(path) == "string" and type(bps) == "table" then
+      local clean = {}
+      for _, bp in ipairs(bps) do
+        if type(bp) == "table" and type(bp.line) == "number" then
+          clean[#clean + 1] = {
+            line = bp.line,
+            condition = bp.condition,
+            hitCondition = bp.hitCondition,
+            logMessage = bp.logMessage,
+          }
+        end
+      end
+      if #clean > 0 then
+        table.sort(clean, function(a, b)
+          return a.line < b.line
+        end)
+        M.store[path] = clean
+      end
+    end
+  end
+  M.render_all()
 end
 
 -- Repaint signs for every file that has breakpoints (e.g. after a buffer opens, so

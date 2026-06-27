@@ -119,4 +119,105 @@ nx.test.describe("nxvim-dap breakpoints", function()
     end
     nx.test.expect(n).to_be(0)
   end)
+
+  nx.test.it("restore() seeds the store (sorted) and repaints signs", function(t)
+    local f = open_temp(t)
+    local path = signs.abspath(f)
+    -- The shape persisted to the workspace shada: abspath -> list of breakpoints. Given
+    -- out of order, with one carrying a condition, and one bogus (no numeric line).
+    breakpoints.restore({
+      [path] = {
+        { line = 3, condition = "x > 1" },
+        { line = 1 },
+        { bogus = true },
+      },
+    })
+    local bps = breakpoints.list()[path]
+    nx.test.expect(#bps).to_be(2) -- the bogus entry is dropped
+    nx.test.expect(bps[1].line).to_be(1) -- sorted by line
+    nx.test.expect(bps[2].line).to_be(3)
+    nx.test.expect(bps[2].condition).to_be("x > 1")
+    -- The open file's gutter shows the restored breakpoints.
+    nx.test.expect(#bp_marks()).to_be(2)
+  end)
+
+  nx.test.it("restore() tolerates a missing / malformed blob", function()
+    -- A fresh store (no key yet) hands back nil; a non-table is ignored — neither errors.
+    breakpoints.restore(nil)
+    breakpoints.restore("garbage")
+    local n = 0
+    for _ in pairs(breakpoints.list()) do
+      n = n + 1
+    end
+    nx.test.expect(n).to_be(0)
+  end)
+
+  nx.test.it("fires on_persist after each breakpoint mutation", function(t)
+    open_temp(t)
+    local saved = 0
+    breakpoints.on_persist = function()
+      saved = saved + 1
+    end
+    t:feed("2G")
+    breakpoints.toggle() -- set
+    nx.test.expect(saved).to_be(1)
+    breakpoints.set_at_cursor({ condition = "x" }) -- edit
+    nx.test.expect(saved).to_be(2)
+    breakpoints.toggle() -- remove
+    nx.test.expect(saved).to_be(3)
+    breakpoints.clear_all() -- clear
+    nx.test.expect(saved).to_be(4)
+    breakpoints.on_persist = nil
+  end)
+
+  nx.test.it("lists every breakpoint as location-list entries", function(t)
+    local f = open_temp(t)
+    t:feed("3G")
+    breakpoints.toggle({ condition = "i == 2" })
+    t:feed("1G")
+    breakpoints.toggle() -- a plain one, set after but on an earlier line
+
+    -- The entries are one-per-breakpoint, sorted by file then line, each describing the
+    -- breakpoint kind — the payload `DapBreakpoints` sends to the location list.
+    local items = dap._breakpoint_items()
+    nx.test.expect(#items).to_be(2)
+    nx.test.expect(items[1].filename).to_be(signs.abspath(f))
+    nx.test.expect(items[1].lnum).to_be(1)
+    nx.test.expect(items[1].text).to_be("breakpoint")
+    nx.test.expect(items[2].lnum).to_be(3)
+    nx.test.expect(items[2].text).to_be("cond: i == 2")
+  end)
+
+  nx.test.it("round-trips breakpoints through the plugin shada store", function(t)
+    -- Exercise the real persistence path the workspace wiring uses: the same
+    -- `nx.shada.plugin()` handle (the nxvim-dap namespace; in-memory here since the test
+    -- session has no shada file), saved on change and reloaded into a "fresh session".
+    local f = open_temp(t)
+    local path = signs.abspath(f)
+    -- A test attributes to no rtp plugin, so the namespace must be passed explicitly
+    -- (the dev escape hatch); the real plugin's setup() calls `nx.shada.plugin()` with no
+    -- argument and is assigned the `nxvim-dap` namespace from its install location.
+    local store = nx.shada.plugin("nxvim-dap")
+    breakpoints.on_persist = function()
+      store:set("breakpoints", breakpoints.list())
+    end
+
+    t:feed("2G")
+    breakpoints.toggle({ condition = "n == 5" })
+    t:feed("4G")
+    breakpoints.toggle() -- a plain one too
+
+    -- "Restart": the old session's hook is gone and the live store is empty, just as it
+    -- would be at boot, before setup() reloads from the shada.
+    breakpoints.on_persist = nil
+    breakpoints.restore({})
+    nx.test.expect(next(breakpoints.list())).to_be_nil()
+
+    breakpoints.restore(store:get("breakpoints"))
+    local bps = breakpoints.list()[path]
+    nx.test.expect(#bps).to_be(2)
+    nx.test.expect(bps[1].line).to_be(2)
+    nx.test.expect(bps[1].condition).to_be("n == 5")
+    nx.test.expect(bps[2].line).to_be(4)
+  end)
 end)

@@ -63,6 +63,9 @@ M.exception_filters = nil
 local session_seq = 0
 local hl_applied = false
 local autocmds_wired = false
+-- The workspace breakpoints are restored once, on the first setup() in a workspace
+-- session — re-running setup() must not clobber live breakpoints with the saved set.
+local bp_restored = false
 
 -- ----- session lifecycle -----------------------------------------------------
 
@@ -578,6 +581,61 @@ function M.clear_breakpoints()
   breakpoints.clear_all()
 end
 
+-- A one-line label for a breakpoint in the list: the kind plus any condition / hit /
+-- log attribute, so the location list reads at a glance.
+local function describe_breakpoint(bp)
+  local parts = {}
+  if bp.logMessage and bp.logMessage ~= "" then
+    parts[#parts + 1] = "log: " .. bp.logMessage
+  end
+  if bp.condition and bp.condition ~= "" then
+    parts[#parts + 1] = "cond: " .. bp.condition
+  end
+  if bp.hitCondition and bp.hitCondition ~= "" then
+    parts[#parts + 1] = "hit: " .. bp.hitCondition
+  end
+  if #parts == 0 then
+    return "breakpoint"
+  end
+  return table.concat(parts, "  ")
+end
+
+-- Build the location-list entries for every set breakpoint: one entry per breakpoint,
+-- `{ filename, lnum, col, text }`, sorted by file then line. Factored out so it can be
+-- tested without driving the (async, server-side) location list.
+function M._breakpoint_items()
+  local items = {}
+  for path, bps in pairs(breakpoints.list()) do
+    for _, bp in ipairs(bps) do
+      items[#items + 1] = {
+        filename = path,
+        lnum = bp.line,
+        col = 1,
+        text = describe_breakpoint(bp),
+      }
+    end
+  end
+  table.sort(items, function(a, b)
+    if a.filename ~= b.filename then
+      return a.filename < b.filename
+    end
+    return a.lnum < b.lnum
+  end)
+  return items
+end
+
+-- List every breakpoint in a location list (so selecting one jumps to that file/line).
+-- Honors 'qfdock' like every other nxvim location list. A no-op (with a notice) when no
+-- breakpoint is set, so the user isn't dropped into an empty list.
+function M.list_breakpoints()
+  local items = M._breakpoint_items()
+  if #items == 0 then
+    nx.notify("nxvim-dap: no breakpoints set", 2)
+    return
+  end
+  nx.qf.send_to_loclist(items, { title = "Breakpoints" })
+end
+
 -- ----- UI surfaces -----------------------------------------------------------
 
 function M.repl_toggle()
@@ -611,6 +669,7 @@ local COMMANDS = {
   { "DapBreakpointCondition", "set_breakpoint_condition", "Set a conditional breakpoint" },
   { "DapLogPoint", "set_log_point", "Set a log point" },
   { "DapEditBreakpoint", "edit_breakpoint", "Edit the breakpoint at the cursor" },
+  { "DapBreakpoints", "list_breakpoints", "List all breakpoints in a location list" },
   { "DapClearBreakpoints", "clear_breakpoints", "Remove every breakpoint" },
   { "DapExceptionBreakpoints", "set_exception_breakpoints", "Pick exception breakpoint filters" },
   { "DapWatchClear", "clear_watches", "Remove every watch expression" },
@@ -658,6 +717,24 @@ function M.setup(opts)
     if M._session and M._session.initialized and not M._session.terminated then
       M._session:set_breakpoints(path, bps)
     end
+  end
+
+  -- Persist breakpoints across sessions, but only inside a `--workspace` launch:
+  -- breakpoints are project state, and the shared global store would mix every
+  -- project's together (and never know which to restore). The plugin shada is loaded
+  -- before init.lua runs, so the saved set is already in hand here — restore it once
+  -- (a re-run of setup() must not wipe live breakpoints), then save on every change.
+  if nx.workspace.active() then
+    local store = nx.shada.plugin()
+    if not bp_restored then
+      breakpoints.restore(store:get("breakpoints"))
+      bp_restored = true
+    end
+    breakpoints.on_persist = function()
+      store:set("breakpoints", breakpoints.list())
+    end
+  else
+    breakpoints.on_persist = nil
   end
 
   -- Wire the sidebar's callbacks into the cross-session state init.lua owns: source
