@@ -46,15 +46,31 @@ local function current_file()
   return vim.fn.fnamemodify(name, ":p")
 end
 
+-- macOS resolves the firmlinks /var, /tmp, /etc to /private/var, /private/tmp,
+-- /private/etc, so `getcwd` (which :cd canonicalizes through the OS) can come back
+-- `/private/…`-prefixed while a buffer name keeps its `/var/…` spelling. Normalize
+-- both spellings to the short form so the relativize prefix test still recognises a
+-- file as living under cwd. A no-op off macOS (and on any non-firmlink path).
+local FIRMLINKS = { var = true, tmp = true, etc = true }
+local function unfirmlink(p)
+  local root, rest = p:match("^/private/([^/]+)(.*)$")
+  if root and FIRMLINKS[root] then
+    return "/" .. root .. rest
+  end
+  return p
+end
+
 -- The file path made relative to `cwd` (a leading `cwd/` stripped), or `file` unchanged
--- when it isn't under `cwd`.
+-- when it isn't under `cwd`. The prefix test runs on firmlink-normalized spellings so a
+-- canonicalized cwd and a symlink-naive file path still match (see `unfirmlink`).
 local function relativize(file, cwd)
   if file == "" or cwd == "" then
     return file
   end
-  local prefix = cwd:gsub("/+$", "") .. "/"
-  if file:sub(1, #prefix) == prefix then
-    return file:sub(#prefix + 1)
+  local nfile = unfirmlink(file)
+  local prefix = unfirmlink(cwd):gsub("/+$", "") .. "/"
+  if nfile:sub(1, #prefix) == prefix then
+    return nfile:sub(#prefix + 1)
   end
   return file
 end
