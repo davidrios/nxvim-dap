@@ -14,7 +14,8 @@
 --   <F5>       / :DapContinue           start debugging (or resume when stopped)
 --   <F6>       / :DapRestart            restart the active session
 --   <F10>/<F11>/<F12>                   step over / into / out
---   <leader>dr / :DapReplToggle         toggle the debug REPL (i / <CR> to evaluate)
+--   <leader>dr / :DapReplToggle         toggle the debug REPL (i / <CR> opens the prompt;
+--                                       it stays open — <CR> evaluates, <Esc> closes)
 --   <leader>du / :DapSidebarToggle      toggle the scopes / stack sidebar
 --   <leader>dx / :DapTerminate          end the session
 --   :DapWatch <expr>                    add a watch (or press `a` in the sidebar)

@@ -70,6 +70,49 @@ nx.test.describe("nxvim-dap repl", function()
     nx.test.expect(repl.cursor_line()).to_be(#lines)
   end)
 
+  -- The `dap>` prompt stays open like a real REPL: each `<CR>` evaluates and reopens
+  -- the prompt for the next line; only `<Esc>` closes it. The old prompt closed after a
+  -- single submission (one expression per `<CR>` on the view).
+  nx.test.it("keeps the dap> prompt open across submissions until <Esc>", function(t)
+    local fake = {
+      current_frame = { id = 1 },
+      evaluate = function(_, _expr, _frame, _ctx, cb)
+        cb(nil, { result = "ok" })
+      end,
+    }
+    repl.open()
+    repl.set_session(fake)
+    t:sleep(40)
+
+    -- Open the prompt (the view's <CR> select), then submit two expressions in a row —
+    -- the second only reaches a prompt if the first didn't close it.
+    t:feed("<CR>")
+    nx.test.expect(t:mode()).to_be("c") -- the prompt is open (command-line mode)
+    t:feed("1+1<CR>")
+    t:sleep(40)
+    nx.test.expect(t:mode()).to_be("c") -- it reopened for the next line (was "n" before)
+    t:feed("2+2<CR>")
+    t:sleep(40)
+
+    local lines = nx.buf.lines(repl.bufnr(), 0, -1, false)
+    local function has(s)
+      for _, l in ipairs(lines) do
+        if l == s then
+          return true
+        end
+      end
+      return false
+    end
+    -- Both expressions were echoed → the prompt was still open for the 2nd <CR>.
+    nx.test.expect(has("> 1+1")).to_be(true)
+    nx.test.expect(has("> 2+2")).to_be(true)
+
+    -- <Esc> ends the loop: back to normal mode, no prompt open.
+    t:feed("<Esc>")
+    t:sleep(20)
+    nx.test.expect(t:mode()).never.to_be("c")
+  end)
+
   nx.test.it("does not steal focus when output arrives while editing elsewhere", function(t)
     repl.open() -- opens + focuses the repl (bottom dock)
     nx.layer.main() -- leave it for the main editor

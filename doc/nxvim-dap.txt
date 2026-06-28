@@ -94,7 +94,8 @@ COMMANDS                                                 *nxvim-dap-commands*
 :DapExceptionBreakpoints Pick exception breakpoint filters.
 :DapWatch [expr]        Add a watch expression (no argument prompts).
 :DapWatchClear          Remove every watch expression.
-:DapReplToggle          Toggle the REPL / console.
+:DapReplToggle          Toggle the REPL / console. The `dap>` prompt stays open:
+                        <CR> evaluates a line and reopens it, <Esc> closes it.
 :DapSidebarToggle       Toggle the scopes / stack sidebar.
 :DapEval [expr]         Evaluate an expression in the stopped frame.
 

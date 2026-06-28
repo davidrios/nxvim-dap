@@ -227,6 +227,11 @@ end
 -- session, scoped to its own namespace so it's independent of the `:` / search
 -- histories and of any other plugin's input history. `complete` wires `<Tab>`
 -- autocomplete (with a side-docs pane) to the adapter's `completions` request.
+--
+-- The prompt STAYS OPEN like a real REPL: each `<CR>` evaluates the line and reopens
+-- the prompt for the next expression; only `<Esc>` (which resolves the input to nil,
+-- vs `""` for an empty `<CR>`) closes the loop. An empty `<CR>` re-prompts without
+-- evaluating (`M.eval` no-ops on "").
 function M.prompt()
   nx.ui
     .input({
@@ -235,9 +240,11 @@ function M.prompt()
       complete = repl_complete,
     })
     :next(function(expr)
-      if expr then
-        M.eval(expr)
+      if expr == nil then
+        return -- <Esc> ends the REPL prompt loop
       end
+      M.eval(expr)
+      M.prompt() -- reopen for the next line, keeping the REPL input open
     end)
 end
 
