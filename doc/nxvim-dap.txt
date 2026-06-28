@@ -90,7 +90,7 @@ COMMANDS                                                 *nxvim-dap-commands*
 :DapBreakpointCondition Set a conditional breakpoint.
 :DapLogPoint            Set a log point.
 :DapEditBreakpoint      Edit condition / hit count / log message at the cursor.
-:DapBreakpoints         List every breakpoint in a location list.
+:DapBreakpoints         List every breakpoint in a named list.
 :DapClearBreakpoints    Remove every breakpoint.
 :DapExceptionBreakpoints Pick exception breakpoint filters.
 :DapWatch [expr]        Add a watch expression (no argument prompts).

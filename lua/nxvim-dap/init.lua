@@ -628,9 +628,9 @@ local function describe_breakpoint(bp)
   return table.concat(parts, "  ")
 end
 
--- Build the location-list entries for every set breakpoint: one entry per breakpoint,
+-- Build the named-list entries for every set breakpoint: one entry per breakpoint,
 -- `{ filename, lnum, col, text }`, sorted by file then line. Factored out so it can be
--- tested without driving the (async, server-side) location list.
+-- tested without driving the (async, server-side) list.
 function M._breakpoint_items()
   local items = {}
   for path, bps in pairs(breakpoints.list()) do
@@ -652,44 +652,32 @@ function M._breakpoint_items()
   return items
 end
 
--- The dynamic location list backing `:DapBreakpoints`: a named list bound to
--- `M._breakpoint_items`, so a single `nx.qf.refresh` rewrites it in place whenever the
--- breakpoint set changes — an open window repaints live instead of showing a stale
--- snapshot. Registered lazily on the first `:DapBreakpoints`; `_refresh_breakpoint_list`
--- is then a no-op until that point.
+-- The named list backing `:DapBreakpoints`. Unlike a per-window location list, a named
+-- list lives on the editor and is addressed by name, so it survives closing the window
+-- it was opened from (reopen by name re-renders) and never collides with the quickfix.
+-- `M._breakpoint_items` is pushed into it after every breakpoint mutation, so an open
+-- tab repaints live instead of showing a stale snapshot.
 local BP_LIST = "nxvim-dap-breakpoints"
-local bp_list_registered = false
 
--- Re-run the breakpoint location list's source and repaint it (a no-op when no window
--- shows it). Called after every breakpoint mutation so an open list stays current.
+-- Rewrite the breakpoint named list from the current breakpoint set, repainting its tab
+-- in place when open. Called after every breakpoint mutation so an open list stays
+-- current; harmless before the list has ever been shown (it just updates the stored
+-- contents — no window).
 function M._refresh_breakpoint_list()
-  if bp_list_registered then
-    nx.qf.refresh(BP_LIST)
-  end
+  nx.qf.list(BP_LIST, M._breakpoint_items(), { title = "Breakpoints" })
 end
 
--- List every breakpoint in a location list (so selecting one jumps to that file/line).
--- It's a *dynamic* list: it stays bound to its source, so adding/removing a breakpoint
--- while it's open updates it live. Honors 'qfdock' like every other nxvim location list.
--- A no-op (with a notice) when no breakpoint is set, so the user isn't dropped into an
--- empty window.
+-- List every breakpoint in a named list (so selecting one jumps to that file/line),
+-- shown in its own bottom-dock tab. Adding/removing a breakpoint while it's open updates
+-- it live (refresh-on-commit). A no-op (with a notice) when no breakpoint is set, so the
+-- user isn't dropped into an empty window.
 function M.list_breakpoints()
   if #M._breakpoint_items() == 0 then
     nx.notify("nxvim-dap: no breakpoints set", 2)
     return
   end
-  -- Bind the list to the window it opens in (redefining keeps that binding), so live
-  -- refreshes land where it shows.
-  nx.qf.dynamic({
-    name = BP_LIST,
-    loclist = true,
-    title = "Breakpoints",
-    source = M._breakpoint_items,
-  })
-  bp_list_registered = true
-  nx.qf.refresh(BP_LIST):next(function()
-    nx.qf.lopen()
-  end)
+  M._refresh_breakpoint_list()
+  nx.qf.show(BP_LIST)
 end
 
 -- ----- UI surfaces -----------------------------------------------------------
@@ -724,7 +712,7 @@ local COMMANDS = {
   { "DapBreakpointCondition", "set_breakpoint_condition", "Set a conditional breakpoint" },
   { "DapLogPoint", "set_log_point", "Set a log point" },
   { "DapEditBreakpoint", "edit_breakpoint", "Edit the breakpoint at the cursor" },
-  { "DapBreakpoints", "list_breakpoints", "List all breakpoints in a location list" },
+  { "DapBreakpoints", "list_breakpoints", "List all breakpoints in a named list" },
   { "DapClearBreakpoints", "clear_breakpoints", "Remove every breakpoint" },
   { "DapExceptionBreakpoints", "set_exception_breakpoints", "Pick exception breakpoint filters" },
   { "DapWatchClear", "clear_watches", "Remove every watch expression" },

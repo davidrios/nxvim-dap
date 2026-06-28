@@ -170,7 +170,7 @@ nx.test.describe("nxvim-dap breakpoints", function()
     breakpoints.on_commit = nil
   end)
 
-  nx.test.it("lists every breakpoint as location-list entries", function(t)
+  nx.test.it("lists every breakpoint as named-list entries", function(t)
     local f = open_temp(t)
     t:feed("3G")
     breakpoints.toggle({ condition = "i == 2" })
@@ -178,7 +178,7 @@ nx.test.describe("nxvim-dap breakpoints", function()
     breakpoints.toggle() -- a plain one, set after but on an earlier line
 
     -- The entries are one-per-breakpoint, sorted by file then line, each describing the
-    -- breakpoint kind — the payload `DapBreakpoints` sends to the location list.
+    -- breakpoint kind — the payload `DapBreakpoints` sends to the named list.
     local items = dap._breakpoint_items()
     nx.test.expect(#items).to_be(2)
     nx.test.expect(items[1].filename).to_be(signs.abspath(f))
@@ -188,29 +188,42 @@ nx.test.describe("nxvim-dap breakpoints", function()
     nx.test.expect(items[2].text).to_be("cond: i == 2")
   end)
 
-  nx.test.it("opens a breakpoints location list that refreshes on change", function(t)
+  nx.test.it("opens a breakpoints named list that refreshes on change", function(t)
     local f = open_temp(t)
-    local mainwin = nx.win.current()
+    local srcwin = nx.win.current()
     t:feed("2G")
     breakpoints.toggle()
 
-    -- Open the list: it binds to this window and shows the one breakpoint.
+    -- Open the list in its own dock tab; it shows the one breakpoint. The named list is
+    -- window-independent, so it is NOT bound to `srcwin`.
     dap.list_breakpoints()
     t:sleep(80)
-    nx.test.expect(#nx.qf.getloclist(mainwin)).to_be(1)
+    -- The dock tab is now focused; read its rendered rows (one non-empty line per
+    -- breakpoint) straight off the display buffer.
+    local listbuf = nx.buf.current()
+    local function bp_rows()
+      local count = 0
+      for _, line in ipairs(nx.buf.lines(listbuf, 0, -1, false)) do
+        if line ~= "" then
+          count = count + 1
+        end
+      end
+      return count
+    end
+    nx.test.expect(bp_rows()).to_be(1)
 
-    -- Back in the source buffer, add another breakpoint. The list is *dynamic*, so its
-    -- refresh-on-commit rewrites it in place — without re-running `:DapBreakpoints`.
-    t:cmd("lclose")
+    -- Back in the source buffer, add another breakpoint. The open list repaints in place
+    -- (refresh-on-commit) without re-running `:DapBreakpoints`.
+    nx.win.set_current(srcwin)
     t:feed("4G")
     breakpoints.toggle()
     t:sleep(80)
-    nx.test.expect(#nx.qf.getloclist(mainwin)).to_be(2)
+    nx.test.expect(bp_rows()).to_be(2)
 
-    -- Clearing every breakpoint refreshes the list down to empty too.
+    -- Clearing every breakpoint repaints the list down to empty too.
     breakpoints.clear_all()
     t:sleep(80)
-    nx.test.expect(#nx.qf.getloclist(mainwin)).to_be(0)
+    nx.test.expect(bp_rows()).to_be(0)
   end)
 
   nx.test.it("round-trips breakpoints through the plugin shada store", function(t)
