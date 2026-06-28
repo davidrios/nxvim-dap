@@ -77,7 +77,7 @@ is left as-is and warned about.
 ==============================================================================
 COMMANDS                                                 *nxvim-dap-commands*
 
-:DapContinue            Start debugging, or resume a stopped session.
+:DapContinue [config]   Start debugging, or resume a stopped session. See ARGUMENTS.
 :DapStepOver            Step over.
 :DapStepInto            Step into.
 :DapStepOut             Step out.
@@ -90,6 +90,7 @@ COMMANDS                                                 *nxvim-dap-commands*
 :DapBreakpointCondition Set a conditional breakpoint.
 :DapLogPoint            Set a log point.
 :DapEditBreakpoint      Edit condition / hit count / log message at the cursor.
+:DapBreakpoints         List every breakpoint in a location list.
 :DapClearBreakpoints    Remove every breakpoint.
 :DapExceptionBreakpoints Pick exception breakpoint filters.
 :DapWatch [expr]        Add a watch expression (no argument prompts).
@@ -98,6 +99,28 @@ COMMANDS                                                 *nxvim-dap-commands*
                         <CR> evaluates a line and reopens it, <Esc> closes it.
 :DapSidebarToggle       Toggle the scopes / stack sidebar.
 :DapEval [expr]         Evaluate an expression in the stopped frame.
+
+Three commands take an optional argument (`[...]`); the rest take none.
+                                                        *nxvim-dap-arguments*
+ARGUMENTS ~
+
+:DapContinue [config]
+        [config] is a configuration NAME — a key of `dap.configurations` for the
+        current buffer's filetype (or one merged in via `opts.configurations`).
+        `<Tab>` completes the available names. With NO argument: resume a
+        stopped session if one is running; otherwise launch the filetype's
+        configuration (prompting to choose when more than one applies).
+
+:DapEval [expr]
+        [expr] is any expression the adapter can evaluate in the stopped frame
+        (e.g. `:DapEval len(items)`). It may contain spaces. With NO argument
+        the REPL opens its `dap>` prompt instead, where each <CR> evaluates a
+        line (see :DapReplToggle).
+
+:DapWatch [expr]
+        [expr] is the expression to add to the WATCHES panel, re-evaluated on
+        every stop (e.g. `:DapWatch self.count`). It may contain spaces. With NO
+        argument nxvim prompts for the expression.
 
 ==============================================================================
 MAPPINGS                                                 *nxvim-dap-mappings*

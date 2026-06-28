@@ -813,17 +813,24 @@ function M.setup(opts)
   nx.command("DapContinue", function(ev)
     M.continue(ev and ev.args)
   end, {
-    desc = "Start or resume debugging (optionally a named configuration)",
+    desc = "DapContinue [config] — start/resume; [config] launches a named "
+      .. "configuration (<Tab>-completes the current filetype's). No arg resumes a "
+      .. "stopped session, else picks from the available configs.",
     complete = function()
       return M._configuration_names()
     end,
   })
   nx.command("DapEval", function(ev)
     M.eval(ev and ev.args)
-  end, { desc = "Evaluate an expression in the stopped frame" })
+  end, {
+    desc = "DapEval [expr] — evaluate [expr] in the stopped frame. No arg opens the "
+      .. "REPL prompt instead.",
+  })
   nx.command("DapWatch", function(ev)
     M.add_watch(ev and ev.args)
-  end, { desc = "Add a watch expression (no argument prompts for one)" })
+  end, {
+    desc = "DapWatch [expr] — add a watch for [expr]. No arg prompts for one.",
+  })
 
   -- Default keymaps (any false entry, or `mappings = false`, disables it).
   if M.config.mappings ~= false then
