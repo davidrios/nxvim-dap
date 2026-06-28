@@ -91,12 +91,19 @@ function M.render()
   end
 end
 
--- Append one display line, optionally highlighting the whole line with `hl`.
-local function push(line, hl)
-  lines[#lines + 1] = line
-  if hl then
-    marks[#marks + 1] =
-      { line = #lines - 1, col = 0, end_row = #lines - 1, end_col = #line, hl_group = hl }
+-- Append `text` as one or more display lines, optionally highlighting each whole line
+-- with `hl`. `text` may carry embedded newlines (a multi-line eval error / info
+-- message): split them so the shadow `lines` stays 1:1 with the view buffer — which
+-- splits on "\n" too. A single mark spanning the joined string would otherwise be
+-- clamped to the first row (highlighting only the first line) AND `#lines` would fall
+-- behind the real buffer, so `set_cursor(#lines)` could no longer tail the newest line.
+local function push(text, hl)
+  for _, line in ipairs(vim.split(text, "\n")) do
+    lines[#lines + 1] = line
+    if hl then
+      marks[#marks + 1] =
+        { line = #lines - 1, col = 0, end_row = #lines - 1, end_col = #line, hl_group = hl }
+    end
   end
 end
 
@@ -150,7 +157,9 @@ function M.eval(expr)
   local frame_id = session.current_frame and session.current_frame.id
   session:evaluate(expr, frame_id, "repl", function(err, body)
     if err then
-      push("  " .. tostring(err.message), "NxDapReplError")
+      for _, l in ipairs(vim.split(tostring(err.message or ""), "\n")) do
+        push("  " .. l, "NxDapReplError")
+      end
     else
       for _, l in ipairs(vim.split((body and body.result) or "", "\n")) do
         push("  " .. l)

@@ -37,6 +37,39 @@ nx.test.describe("nxvim-dap repl", function()
     nx.test.expect(repl.cursor_line()).to_be(n)
   end)
 
+  -- A multi-line eval error (a debugpy traceback) must highlight EVERY line of the
+  -- message, not just the first, AND keep the REPL's shadow line count in sync with the
+  -- buffer. The old code pushed the whole `err.message` as ONE `lines` entry with a
+  -- single mark; `set_lines` then split the embedded newlines into separate buffer
+  -- lines, so the mark's `end_col` got clamped to the first row (truncated red
+  -- highlight) and `#lines` fell behind the real buffer — leaving `set_cursor(#lines)`
+  -- short of the true newest line, so output stopped auto-scrolling.
+  nx.test.it("highlights every line of a multi-line eval error and stays synced", function(t)
+    local fake = {
+      current_frame = { id = 1 },
+      evaluate = function(_, _expr, _frame, _ctx, cb)
+        cb({ message = "Traceback (most recent call last):\n  File x\nNameError: boom" })
+      end,
+    }
+    repl.open()
+    repl.set_session(fake)
+    t:sleep(40)
+
+    repl.eval("bad")
+    t:sleep(60)
+
+    local buf = repl.bufnr()
+    local lines = nx.buf.lines(buf, 0, -1, false)
+    local marks = nx.buf.extmarks(buf, nx.ns.create("nxvim-dap-repl"), 0, -1)
+
+    -- Prompt line + 3 message lines, each its own buffer line.
+    nx.test.expect(#lines).to_be(4)
+    -- A mark on the prompt + one on each of the 3 message rows (the bug left only 2).
+    nx.test.expect(#marks).to_be(4)
+    -- The cursor tails the real newest line (the bug desynced #lines and landed short).
+    nx.test.expect(repl.cursor_line()).to_be(#lines)
+  end)
+
   nx.test.it("does not steal focus when output arrives while editing elsewhere", function(t)
     repl.open() -- opens + focuses the repl (bottom dock)
     nx.layer.main() -- leave it for the main editor
