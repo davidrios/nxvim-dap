@@ -128,6 +128,30 @@ nx.test.describe("nxvim-dap repl", function()
     nx.test.expect(nx.win.current()).to_be(before)
   end)
 
+  -- debugpy emits DAP `output` events with category `telemetry` at startup (`output:
+  -- "ptvsd"` and `"debugpy"`, neither newline-terminated). The DAP spec says clients
+  -- must NOT show telemetry to the user, but `append_output` buffered them in `pending`
+  -- and concatenated them into a stray `ptvsddebugpy` line, dumped just before the first
+  -- real REPL output. Telemetry must be dropped entirely — buffer included.
+  nx.test.it("drops telemetry output instead of leaking ptvsddebugpy", function(t)
+    repl.open()
+
+    -- The two unterminated telemetry events debugpy sends on attach…
+    repl.append_output("telemetry", "ptvsd")
+    repl.append_output("telemetry", "debugpy")
+    -- …then a real program print.
+    repl.append_output("stdout", "hello\n")
+    t:sleep(40)
+
+    local lines = nx.buf.lines(repl.bufnr(), 0, -1, false)
+    for _, l in ipairs(lines) do
+      nx.test.expect(l:find("ptvsd", 1, true)).never.to_be_truthy()
+      nx.test.expect(l:find("debugpy", 1, true)).never.to_be_truthy()
+    end
+    -- The real output is still there, unpolluted by a telemetry prefix.
+    nx.test.expect(lines[#lines]).to_be("hello")
+  end)
+
   nx.test.it("completes a REPL expression from the adapter, honoring start/length", function(t)
     -- A fake session mirroring how debugpy answers `os.get`: it completes the attribute
     -- after the dot, returning the member name (`getcwd`) with a 0-based replace span

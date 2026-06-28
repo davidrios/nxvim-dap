@@ -109,7 +109,15 @@ end
 
 -- Append text (which may contain several lines / a partial tail) from an output
 -- stream, keeping an unterminated fragment buffered until its newline arrives.
-function M.append_output(_category, text)
+--
+-- The DAP `telemetry` category is for telemetry servers, not the user — the spec says
+-- clients must not display it. debugpy emits two such events on attach (`output: "ptvsd"`
+-- and `"debugpy"`, neither newline-terminated), which would otherwise sit in `pending`,
+-- concatenate into a stray `ptvsddebugpy`, and get dumped before the first real output.
+function M.append_output(category, text)
+  if category == "telemetry" then
+    return
+  end
   pending = pending .. text:gsub("\r\n", "\n")
   local flushed = false
   while true do
