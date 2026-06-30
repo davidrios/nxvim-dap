@@ -51,13 +51,15 @@ function M.defaults()
       height = 12,
       open_on_start = true, -- auto-open the REPL when a session starts
     },
-    -- Default keymaps (false on any entry, or `mappings = false`, disables it).
+    -- Default keymaps (false on any entry, or `mappings = false`, disables it). An
+    -- entry can be a single lhs or a list; the F-key actions bind both the plain key
+    -- and its Shift variant, since some terminals/keyboards send Shift+Fn.
     mappings = {
-      continue = "<F5>",
-      step_over = "<F10>",
-      step_into = "<F11>",
-      step_out = "<F12>",
-      restart = "<F6>",
+      continue = { "<F5>", "<S-F5>" },
+      step_over = { "<F10>", "<S-F10>" },
+      step_into = { "<F11>", "<S-F11>" },
+      step_out = { "<F12>", "<S-F12>" },
+      restart = { "<F6>", "<S-F6>" },
       toggle_breakpoint = "<leader>db",
       toggle_breakpoint_condition = "<leader>dB",
       edit_breakpoint = "<leader>de",

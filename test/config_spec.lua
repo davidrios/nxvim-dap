@@ -13,7 +13,9 @@ nx.test.describe("nxvim-dap.config merge", function()
     nx.test.expect(merged.sidebar.width).to_be(60)
     nx.test.expect(merged.sidebar.position).to_be("right") -- untouched default kept
     nx.test.expect(merged.mappings.continue).to_be("<F9>")
-    nx.test.expect(merged.mappings.step_over).to_be("<F10>") -- sibling default kept
+    -- sibling default kept (now a list of the plain key + its Shift variant)
+    nx.test.expect(merged.mappings.step_over[1]).to_be("<F10>")
+    nx.test.expect(merged.mappings.step_over[2]).to_be("<S-F10>")
   end)
 
   nx.test.it("a list value replaces rather than positionally merging", function()

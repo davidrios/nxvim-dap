@@ -264,6 +264,10 @@ dap.configurations.python = {
 | `<F6>`       | restart               | `<leader>du` | toggle sidebar       |
 | `<leader>dx` | terminate             |              |                      |
 
+Each function-key action also fires on its **Shift variant** (`<S-F5>`, `<S-F10>`,
+`<S-F11>`, `<S-F12>`, `<S-F6>`) — some terminals/keyboards send `Shift+Fn`. A `mappings`
+entry can be a single key or a list, so you can rebind one action to several keys.
+
 Inside the **sidebar** these buffer-local keys act on the row under the cursor (defaults,
 configurable via `opts.sidebar.mappings`): `<CR>` expand / jump / toggle filter / switch
 session, `e` edit a value, `a` add a watch, `x` remove the watch, `r` refresh. A

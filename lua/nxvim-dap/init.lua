@@ -822,11 +822,16 @@ function M.setup(opts)
     desc = "Add a watch for [expr]. No arg prompts for one.",
   })
 
-  -- Default keymaps (any false entry, or `mappings = false`, disables it).
+  -- Default keymaps (any false entry, or `mappings = false`, disables it). An entry's
+  -- value is a single lhs string, or a list of lhs strings that all fire the action
+  -- (so an F-key action can also bind its Shift variant — <F5> and <S-F5>).
   if M.config.mappings ~= false then
     for action, lhs in pairs(M.config.mappings) do
       if lhs and MAP_ACTIONS[action] then
-        nx.keymap.set("n", lhs, MAP_ACTIONS[action], { desc = "nxvim-dap: " .. action })
+        local keys = type(lhs) == "table" and lhs or { lhs }
+        for _, key in ipairs(keys) do
+          nx.keymap.set("n", key, MAP_ACTIONS[action], { desc = "nxvim-dap: " .. action })
+        end
       end
     end
   end
